@@ -67,6 +67,10 @@ jobs:
     name: ${{ matrix.job.target }}
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
     runs-on: ${{ matrix.job.os }}
+    # 저장소 기본 워크플로 권한이 read 라서 Publish Release 가 403 으로 실패했다.
+    # 잡 단위로 contents: write 를 명시해 GITHUB_TOKEN 에 릴리스 생성 권한을 준다.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -349,8 +353,19 @@ jobs:
         run: |
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
 
+      # 단일 실행파일(자가압축 포터블 exe)과 msi 를 아티팩트로도 남긴다.
+      # 릴리스 업로드가 실패해도 1시간짜리 빌드 산출물을 잃지 않도록 하는 안전장치.
+      - name: Upload single-file installer artifacts (exe + msi)
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-samlab-installer-${{ matrix.job.arch }}
+          path: ./SignOutput
+
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        # 릴리스 발행이 실패해도 위 아티팩트가 있으므로 잡 전체를 실패시키지 않는다.
+        continue-on-error: true
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
           prerelease: true
