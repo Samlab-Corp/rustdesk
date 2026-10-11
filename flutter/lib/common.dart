@@ -2293,6 +2293,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   String? id;
   String? password;
   String? switchUuid;
+  String? name;
   bool? forceRelay;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -2341,6 +2342,10 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
         switchUuid = args[i + 1];
         i++;
         break;
+      case '--name':
+        name = args[i + 1];
+        i++;
+        break;
       case '--relay':
         forceRelay = true;
         break;
@@ -2349,6 +2354,11 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
     }
   }
   if (type != null && id != null) {
+    // samlab: store the device name as the peer alias before the tab opens,
+    // so the tab label reads "<remote id> · <device name>".
+    if (name != null && name.trim().isNotEmpty) {
+      bind.mainSetPeerOptionSync(id: id, key: 'alias', value: name.trim());
+    }
     switch (type) {
       case UriLinkType.remoteDesktop:
         Future.delayed(Duration.zero, () {
@@ -2523,6 +2533,9 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     if (password != null) args.addAll(['--password', password]);
     String? switch_uuid = param["switch_uuid"];
     if (switch_uuid != null) args.addAll(['--switch_uuid', switch_uuid]);
+    // samlab: device name from the admin page, shown in the tab label.
+    String? name = param["name"];
+    if (name != null) args.addAll(['--name', name]);
     if (param["relay"] != null) args.add("--relay");
     return args;
   }
@@ -3312,16 +3325,21 @@ Widget buildErrorBanner(BuildContext context,
       ));
 }
 
+// samlab: tab label is "<remote id> · <device name>", e.g. "000249 · 심세용_경영1".
+// The device name is the peer alias (passed by the admin page via the `name`
+// link parameter); the remote hostname is used only when no alias is set.
 String getDesktopTabLabel(String peerId, String alias) {
-  String label = alias.isEmpty ? peerId : alias;
+  if (alias.isNotEmpty && alias != peerId) {
+    return "$peerId · $alias";
+  }
+  String label = peerId;
   try {
     String peer = bind.mainGetPeerSync(id: peerId);
     Map<String, dynamic> config = jsonDecode(peer);
     if (config['info']['hostname'] is String) {
       String hostname = config['info']['hostname'];
-      if (hostname.isNotEmpty &&
-          !label.toLowerCase().contains(hostname.toLowerCase())) {
-        label += "@$hostname";
+      if (hostname.isNotEmpty) {
+        label += " · $hostname";
       }
     }
   } catch (e) {
