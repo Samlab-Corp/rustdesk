@@ -44,7 +44,6 @@ pub(crate) fn apply_in_service(password: &str, administrator: bool) -> Status {
     }
 }
 fn verify_service_disk_password(password: &str) -> bool {
-    use std::io::Read;
     // The existing setter logs storage errors rather than returning them. Its ACK
     // is insufficient: read the actual configuration file as this SYSTEM service.
     let result = (|| -> Option<bool> {
@@ -52,14 +51,7 @@ fn verify_service_disk_password(password: &str) -> bool {
         if memory_storage.is_empty() || memory_salt.is_empty() {
             return Some(false);
         }
-        let mut file = std::fs::File::open(Config::file())
-            .ok()?
-            .take(1024 * 1024 + 1);
-        let mut text = String::new();
-        file.read_to_string(&mut text).ok()?;
-        if text.len() > 1024 * 1024 {
-            return Some(false);
-        }
+        let text = policy::read_config(&Config::file()).ok()?;
         let disk: hbb_common::toml::Value = text.parse().ok()?;
         let storage = disk.get("password")?.as_str()?;
         let salt = disk.get("salt")?.as_str()?;

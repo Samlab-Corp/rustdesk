@@ -1,5 +1,20 @@
 //! Installer policy, independent of GUI, IPC and live configuration.
 pub const MAX_SECRET_BYTES: usize = 256;
+pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+pub fn read_config(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take((MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_string(&mut text)?;
+    if text.len() > MAX_CONFIG_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "configuration_too_large",
+        ));
+    }
+    Ok(text)
+}
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric())
 }
@@ -85,6 +100,49 @@ mod tests {
             administrator: true,
             settings_allowed: true,
         }
+    }
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let base = std::env::temp_dir();
+            for attempt in 0..100 {
+                let path = base.join(format!(
+                    "installer-password-policy-{}-{}-{attempt}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+                if std::fs::create_dir(&path).is_ok() {
+                    return Self(path);
+                }
+            }
+            panic!("cannot create isolated fixture");
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("config"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    #[test]
+    fn actual_disk_reader_reports_missing_invalid_and_oversized_files() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config");
+        assert!(read_config(&path).is_err());
+        std::fs::write(&path, [255]).unwrap();
+        assert!(read_config(&path).is_err());
+        std::fs::write(&path, vec![b'x'; MAX_CONFIG_BYTES + 1]).unwrap();
+        assert!(read_config(&path).is_err());
+    }
+    #[test]
+    fn actual_disk_reader_returns_the_file_contents_without_profile_access() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config");
+        std::fs::write(&path, "fixture-data").unwrap();
+        assert_eq!(read_config(&path).unwrap(), "fixture-data");
     }
     #[test]
     fn rejects_empty_short_oversized_multiline_controls_and_invalid_utf8() {
