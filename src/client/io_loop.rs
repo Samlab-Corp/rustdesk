@@ -2125,6 +2125,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     self.handler.handle_terminal_response(response);
                 }
+                Some(message::Union::NativeManagementChallenge(response)) => self.handler.handle_native_management_challenge(response),
+                Some(message::Union::NativeManagementResult(response)) => self.handler.handle_native_management_result(response),
                 _ => {}
             }
         }

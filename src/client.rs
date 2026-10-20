@@ -1755,6 +1755,8 @@ struct ConnToken {
 pub struct LoginConfigHandler {
     // Explicit headless sessions never read or persist peer credentials/options.
     pub ephemeral: bool,
+    // Memory-only mode marker; never serialized in peer configuration.
+    pub native_management: Option<NativeManagementSession>,
     id: String,
     pub conn_type: ConnType,
     pub is_terminal_admin: bool,
@@ -2778,6 +2780,10 @@ impl LoginConfigHandler {
             ConnType::TERMINAL => {
                 let mut terminal = Terminal::new();
                 terminal.service_id = self.get_option(self.get_key_terminal_service_id());
+                if let Some(management) = self.native_management.as_ref() {
+                    terminal.service_id.clear();
+                    terminal.native_management = Some(management.clone()).into();
+                }
                 lr.set_terminal(terminal);
             }
             _ => {}

@@ -103,3 +103,5 @@ Then translate that source into the file's target language (infer the language f
 * New English-text keys use sentence case, not Title Case: `Use ID whitelisting`, **not** `Use ID Whitelisting`. Acronyms (ID, IP, 2FA…) stay uppercase. Legacy Title-Case keys (e.g. `Use IP Whitelisting`) stay as-is — do not rename them.
 * Since the key itself is the English display text, a sentence-case key usually needs **no** `en.rs` entry; add one only when the display text must differ from the key (e.g. `*_tip` keys).
 * Append each new key to `template.rs` (with `""`) and to every `src/lang/*.rs` file (translated, or `""` if unsure), at the end of the list.
+
+* Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.

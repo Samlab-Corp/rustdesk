@@ -24,6 +24,10 @@ path = "src/service.rs"
 name = "samlab-terminal"
 path = "src/bin/samlab-terminal.rs"
 
+[[bin]]
+name = "samlab-management"
+path = "src/bin/samlab-management.rs"
+
 [features]
 inline = []
 use_samplerate = ["samplerate"]
@@ -128,12 +132,15 @@ windows = { version = "0.61", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System",
+    "Win32_System_Com",
     "Win32_System_Diagnostics",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Environment",
     "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Memory",
     "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }
