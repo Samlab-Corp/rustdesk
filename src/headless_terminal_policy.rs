@@ -1,6 +1,12 @@
 //! Dependency-free framing policy, also tested with `rustc --test`.
 pub const MAX_INPUT: usize = 64 * 1024;
 pub const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+// UTF-16 + Base64 must stay below Windows' 32,767-character process limit.
+pub const MAX_COMMAND: usize = 8 * 1024;
+
+pub fn valid_command(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= MAX_COMMAND && !value.contains('\0')
+}
 
 pub fn valid_target(value: &str) -> bool {
     (3..=16).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit())
@@ -105,6 +111,14 @@ impl OutputFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_bound_keeps_encoded_windows_launch_finite() {
+        assert!(valid_command(&"a".repeat(MAX_COMMAND)));
+        assert!(!valid_command(&"a".repeat(MAX_COMMAND + 1)));
+        assert!(!valid_command("  \r\n"));
+        assert!(!valid_command("host\0name"));
+        assert!(valid_command("Write-Output '한글'"));
+    }
     #[test]
     fn requires_explicit_numeric_target() {
         assert!(valid_target("000317"));

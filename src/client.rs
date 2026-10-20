@@ -2230,7 +2230,9 @@ impl LoginConfigHandler {
             } else {
                 self.config.options.insert(name, "Y".to_owned());
             }
-            self.config.store(&self.id);
+            if !self.ephemeral {
+                self.config.store(&self.id);
+            }
             return None;
         }
 

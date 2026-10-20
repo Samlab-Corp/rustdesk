@@ -18,7 +18,8 @@ that pipe. Fields are `password`, `command` (PowerShell), and optional
 `connection_token`. Obtain existing credentials from the approved secret store
 in the invoking program's memory. Never put the JSON in command arguments,
 environment variables, shell history, temporary files, or logs. The maximum
-request size is 64 KiB. The command is limited to 32 KiB, the deadline to 300
+request size is 64 KiB. The command is limited to 8 KiB (before UTF-16/Base64
+expansion to a Windows process argument), the deadline to 300
 seconds and captured terminal output to 4 MiB.
 
 The adapter uses an ephemeral peer configuration, disables normal client logs,

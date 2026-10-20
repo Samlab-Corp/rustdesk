@@ -150,8 +150,7 @@ pub fn run() -> i32 {
         Ok(Some(value))
             if !value.password.is_empty()
                 && value.password.len() <= 1024
-                && !value.command.trim().is_empty()
-                && value.command.len() <= 32768
+                && policy::valid_command(&value.command)
                 && value
                     .connection_token
                     .as_ref()
@@ -160,7 +159,7 @@ pub fn run() -> i32 {
             value
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            report("unconfirmed", "input_timeout", "", None);
+            report("failed", "input_timeout", "", None);
             return 124;
         }
         _ => {
