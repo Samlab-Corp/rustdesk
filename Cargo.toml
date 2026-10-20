@@ -28,6 +28,10 @@ path = "src/bin/samlab-terminal.rs"
 name = "samlab-management"
 path = "src/bin/samlab-management.rs"
 
+[[bin]]
+name = "samlab-viewer"
+path = "src/bin/samlab-viewer.rs"
+
 [features]
 inline = []
 use_samplerate = ["samplerate"]

@@ -10,6 +10,8 @@
 
 ## Project Layout
 
+* Browser desktop viewing uses the dedicated stdin-only receiver in [docs/owned-viewer.md](docs/owned-viewer.md). Keep ordinary remote protocol compatibility, CPU-only bounded JPEG output, exact session/frame/permission input gates, release-on-close, no recording/clipboard/files, and no password in argv/URL/logs. A frame is not hardware identity proof.
+
 ### Directory Structure
 * `src/` Rust app
 * `src/server/` audio / clipboard / input / video / network

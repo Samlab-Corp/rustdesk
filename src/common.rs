@@ -65,6 +65,14 @@ pub const DEFAULT_KEEP_ALIVE: i32 = 60_000;
 
 const MIN_VER_MULTI_UI_SESSION: &str = "1.2.4";
 
+/// True only in the separate fixed viewer process, never in Flutter/service.
+pub fn owned_viewer() -> bool {
+    #[cfg(windows)]
+    { return crate::headless_viewer::active(); }
+    #[cfg(not(windows))]
+    { false }
+}
+
 pub mod input {
     pub const MOUSE_TYPE_MOVE: i32 = 0;
     pub const MOUSE_TYPE_DOWN: i32 = 1;
