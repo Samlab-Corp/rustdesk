@@ -453,13 +453,14 @@ jobs:
 
       - name: Select target libsodium for x86 cross-compilation
         # libsodium-sys 0.2.x selects its bundled MSVC library by the build-script
-        # host width. This job has an x64 host and an i686 target, so use vcpkg's
-        # target library explicitly instead of the bundled x64 library.
+        # host width. Override only the i686 target's links metadata: a global
+        # SODIUM_LIB_DIR would also break the x64 build-script dependencies.
         shell: bash
         run: |
-          sodium_lib_dir="$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib"
+          sodium_lib_dir="$(cygpath -m "$VCPKG_ROOT")/installed/${{ matrix.job.vcpkg-triplet }}/lib"
           test -f "$sodium_lib_dir/libsodium.lib"
-          echo "SODIUM_LIB_DIR=$sodium_lib_dir" >> "$GITHUB_ENV"
+          printf '\n[target.%s.sodium]\nrustc-link-lib = ["static=libsodium"]\nrustc-link-search = ["%s"]\n' \
+            '${{ matrix.job.target }}' "$sodium_lib_dir" >> .cargo/config.toml
 
       - name: Build rustdesk
         id: build
