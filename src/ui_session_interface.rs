@@ -1855,12 +1855,14 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         self.on_connected(self.lc.read().unwrap().conn_type);
         #[cfg(windows)]
         {
-            let mut path = std::env::temp_dir();
-            path.push(self.get_id());
-            let path = path.with_extension(crate::get_app_name().to_lowercase());
-            std::fs::File::create(&path).ok();
-            if let Some(path) = path.to_str() {
-                crate::platform::windows::add_recent_document(&path);
+            if !self.lc.read().unwrap().ephemeral {
+                let mut path = std::env::temp_dir();
+                path.push(self.get_id());
+                let path = path.with_extension(crate::get_app_name().to_lowercase());
+                std::fs::File::create(&path).ok();
+                if let Some(path) = path.to_str() {
+                    crate::platform::windows::add_recent_document(&path);
+                }
             }
         }
         if !pi.windows_sessions.sessions.is_empty() {

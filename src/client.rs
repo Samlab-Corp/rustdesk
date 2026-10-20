@@ -1753,6 +1753,8 @@ struct ConnToken {
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
+    // Explicit headless sessions never read or persist peer credentials/options.
+    pub ephemeral: bool,
     id: String,
     pub conn_type: ConnType,
     pub is_terminal_admin: bool,
@@ -1942,6 +1944,9 @@ impl LoginConfigHandler {
 
     /// Load [`PeerConfig`].
     pub fn load_config(&self) -> PeerConfig {
+        if self.ephemeral {
+            return self.config.clone();
+        }
         debug_assert!(self.id.len() > 0);
         PeerConfig::load(&self.id)
     }
@@ -1952,7 +1957,9 @@ impl LoginConfigHandler {
     ///
     /// * `config` - [`PeerConfig`] to save.
     pub fn save_config(&mut self, config: PeerConfig) {
-        config.store(&self.id);
+        if !self.ephemeral {
+            config.store(&self.id);
+        }
         self.config = config;
     }
 
