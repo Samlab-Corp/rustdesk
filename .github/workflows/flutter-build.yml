@@ -408,9 +408,10 @@ jobs:
           submodules: recursive
 
       - name: Install LLVM and Clang
-        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: ${{ env.LLVM_VERSION }}
+          arch: x64 # bindgen loads libclang into the x64 Rust build-script host; the output target remains i686.
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
