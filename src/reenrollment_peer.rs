@@ -109,12 +109,17 @@ fn command_line(process: &Process) -> Result<String, &'static str> {
         || value.Length > value.MaximumLength
         || start % 2 != 0
         || start < base
-        || start.checked_add(len).is_none_or(|end| end > base + bytes)
+        || range_exceeds_buffer(start, len, base + bytes)
     {
         return Err(UNTRUSTED);
     }
     String::from_utf16(unsafe { std::slice::from_raw_parts(value.Buffer.0, len / 2) })
         .map_err(|_| UNTRUSTED)
+}
+
+// map_or preserves the overflow-denied boundary on the declared Rust 1.75.
+fn range_exceeds_buffer(start: usize, len: usize, buffer_end: usize) -> bool {
+    start.checked_add(len).map_or(true, |end| end > buffer_end)
 }
 
 fn lineage(
@@ -296,6 +301,19 @@ fn command_path<'a>(command: &'a str, role: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_line_range_truth_table_denies_overflow_and_accepts_exact_end() {
+        for (start, len, end, denied) in [
+            (100, 2, 102, false),
+            (100, 2, 103, false),
+            (100, 2, 101, true),
+            (usize::MAX, 1, usize::MAX, true),
+            (usize::MAX, 0, usize::MAX, false),
+            (0, usize::MAX, usize::MAX, false),
+        ] {
+            assert_eq!(range_exceeds_buffer(start, len, end), denied);
+        }
+    }
     #[test]
     fn direct_child_and_creation_fences_reject_scm_replacement_and_pid_reuse() {
         assert!(lineage(20, 10, 10, 10, 200, 100));
