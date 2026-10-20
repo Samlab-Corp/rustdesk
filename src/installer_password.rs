@@ -1,7 +1,7 @@
 //! Administrative installation command. Secrets are accepted only on redirected stdin.
 #[path = "installer_password_policy.rs"]
 mod policy;
-use hbb_common::config::Config;
+use hbb_common::{config::Config, tokio};
 use serde::{Deserialize, Serialize};
 pub const IPC_NAME: &str = "installer-permanent-password";
 pub const VERIFY_IPC_NAME: &str = "installer-verify-permanent-password";
@@ -140,7 +140,10 @@ async fn request_password(password: &str, verify_only: bool) -> policy::Outcome 
     let result = async {
         let mut connection = crate::ipc::connect(1000, "").await.ok()?;
         connection
-            .send_config(ipc_name, password.to_owned())
+            .send(&crate::ipc::Data::Config((
+                ipc_name.to_owned(),
+                Some(password.to_owned()),
+            )))
             .await
             .ok()?;
         match connection.next_timeout(3000).await.ok()? {
