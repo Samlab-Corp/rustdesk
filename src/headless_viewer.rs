@@ -36,6 +36,8 @@ struct Shared {
     encrypted: bool,
     peer: bool,
     keyboard: bool,
+    keyboard_known: bool,
+    version: String,
     error: Option<&'static str>,
     dirty: bool,
     display: usize,
@@ -54,6 +56,8 @@ impl Default for Shared {
             encrypted: false,
             peer: false,
             keyboard: false,
+            keyboard_known: false,
+            version: String::new(),
             error: None,
             dirty: true,
             display: 0,
@@ -66,6 +70,16 @@ impl Default for Shared {
             last: None,
             latest: None,
         }
+    }
+}
+impl Shared {
+    fn peer_record(&self, address: &str, device: &str) -> Option<Value> {
+        if !self.peer || !self.encrypted || !self.keyboard_known || self.version.is_empty() {
+            return None;
+        }
+        Some(
+            json!({"addressId":address,"deviceId":device,"encrypted":true,"hardwareIdentityVerified":false,"platform":"Windows","version":self.version,"keyboard":self.keyboard}),
+        )
     }
 }
 #[derive(Clone, Default)]
@@ -297,16 +311,14 @@ pub fn run() -> i32 {
                 exit = 1;
                 break;
             }
-            if state.peer && state.encrypted && !peer_sent {
-                if !output(
-                    &session_id,
-                    "peer",
-                    json!({"addressId":request.address_id,"deviceId":request.device_id,"encrypted":true,"hardwareIdentityVerified":false,"platform":"Windows"}),
-                ) {
-                    reason = "output_closed";
-                    break;
+            if !peer_sent {
+                if let Some(peer) = state.peer_record(&request.address_id, &request.device_id) {
+                    if !output(&session_id, "peer", peer) {
+                        reason = "output_closed";
+                        break;
+                    }
+                    peer_sent = true;
                 }
-                peer_sent = true;
             }
             if state.dirty {
                 state.dirty = false;
@@ -569,6 +581,10 @@ impl InvokeUiSession for Handler {
             self.fail("unsupported_remote_platform");
             return;
         }
+        if !policy::valid_peer_version(&pi.version) {
+            self.fail("unsupported_remote_version");
+            return;
+        }
         if pi.current_display < 0 {
             self.fail("unsupported_display");
             return;
@@ -586,6 +602,7 @@ impl InvokeUiSession for Handler {
             return;
         }
         let mut s = self.state.lock().unwrap();
+        s.version = pi.version.clone();
         if !s.encrypted {
             s.error = Some("encrypted_connection_required");
         } else {
@@ -605,6 +622,7 @@ impl InvokeUiSession for Handler {
         if name == "keyboard" {
             let mut s = self.state.lock().unwrap();
             s.keyboard = value;
+            s.keyboard_known = true;
             s.dirty = true;
         }
     }
@@ -731,6 +749,44 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_peer_waits_for_actual_version_and_observed_false_permission() {
+        let h = Handler::default();
+        h.set_connection_type(true, true, "TCP");
+        let mut pi = PeerInfo::new();
+        pi.platform = "Windows".into();
+        pi.version = "1.4.9".into();
+        pi.displays.push(DisplayInfo {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        });
+        h.set_peer_info(&pi);
+        assert!(h
+            .state
+            .lock()
+            .unwrap()
+            .peer_record("74067020", "fixture")
+            .is_none());
+        h.set_permission("keyboard", false);
+        let record = h
+            .state
+            .lock()
+            .unwrap()
+            .peer_record("74067020", "fixture")
+            .unwrap();
+        assert_eq!(record["version"], "1.4.9");
+        assert_eq!(record["keyboard"], false);
+        assert_eq!(record["hardwareIdentityVerified"], false);
+        let h = Handler::default();
+        h.set_connection_type(true, true, "TCP");
+        pi.version.clear();
+        h.set_peer_info(&pi);
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("unsupported_remote_version")
+        );
+    }
     #[test]
     fn bounded_json_lines_and_eof() {
         assert!(line(&mut io::Cursor::new(vec![b'x'; policy::MAX_LINE + 1])).is_err());

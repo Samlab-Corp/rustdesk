@@ -64,7 +64,11 @@ input; the broker may replace a rejected input with same-sequence release-all.
 Stdout contains only JSONL public records, all with viewerVersion/sessionId/type:
 
 * `peer`: addressId, deviceId (caller binding), encrypted:true,
-  hardwareIdentityVerified:false, platform:Windows. Authenticated address and
+  hardwareIdentityVerified:false, platform:Windows, version, keyboard:boolean.
+  Version is the actual nonempty numeric major.minor.patch from PeerInfo;
+  malformed/missing versions are blocked, never synthesized. The record waits
+  for an actual keyboard permission message (including an observed false).
+  Authenticated address and
   encrypted login are not hardware identity verification.
 * `permissions`: keyboard and controlAvailable (requested AND actual permission
   AND authenticated encrypted peer). No success is inferred from connecting.

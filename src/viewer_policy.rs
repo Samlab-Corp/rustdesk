@@ -11,6 +11,18 @@ pub const FRAME_INTERVAL: Duration = Duration::from_millis(200);
 pub fn one() -> u8 {
     1
 }
+/// Existing host VERSION is numeric major.minor.patch. Do not echo arbitrary
+/// strings received in a peer-info field, or manufacture a missing version.
+pub fn valid_peer_version(version: &str) -> bool {
+    let parts: Vec<_> = version.split('.').collect();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 5
+                && part.bytes().all(|b| b.is_ascii_digit())
+                && part.parse::<u16>().is_ok()
+        })
+}
 
 /// Caller holds the shared queue write lock; decoder popping holds its read lock.
 /// At most one wake is needed while the next encoded frame is replaceable.
@@ -322,6 +334,14 @@ pub fn jpeg(image: &scrap::ImageRgb) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_actual_numeric_peer_versions_can_be_public() {
+        assert!(valid_peer_version("1.4.9"));
+        assert!(!valid_peer_version(""));
+        assert!(!valid_peer_version("1.4.9 secret"));
+        assert!(!valid_peer_version("1.4.9\n"));
+        assert!(!valid_peer_version("70000.1.1"));
+    }
     #[test]
     fn encoded_backlog_is_one_replaceable_frame_with_one_wake() {
         let q = crossbeam_queue::ArrayQueue::new(8);
