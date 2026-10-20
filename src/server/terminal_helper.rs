@@ -24,6 +24,9 @@ use hbb_common::{
     anyhow::{anyhow, Context, Result},
     log,
 };
+
+pub(crate) mod kiosk_control;
+pub(crate) mod kiosk_bridge;
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::{
     ffi::{c_void, OsStr},

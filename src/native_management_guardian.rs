@@ -230,6 +230,41 @@ mod local {
             .join("Guardian")
             .join("samlab-guardian.exe"))
     }
+    pub(crate) struct FixedKiosk {
+        pub wrapper: PathBuf,
+        pub executable: PathBuf,
+        _files: Vec<File>,
+    }
+    pub(crate) fn pin_kiosk(expected_hash: &str) -> Result<FixedKiosk, &'static str> {
+        use sha2::{Digest, Sha256};
+        let value = unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, KF_FLAG_DEFAULT, None) }.map_err(|_|UNTRUSTED)?;
+        let folder = unsafe { value.to_string() }.map_err(|_|UNTRUSTED);
+        unsafe { CoTaskMemFree(Some(value.0.cast())); }
+        let root = PathBuf::from(folder?).join("LET ME UP - Study Cafe V2");
+        let wrapper = root.join("resources").join("kiosk-control.ps1");
+        let executable = root.join("LET ME UP - Study Cafe V2.exe");
+        let mut files = Vec::new();
+        let mut path = PathBuf::new();
+        for component in wrapper.parent().ok_or(UNTRUSTED)?.components() {
+            path.push(component);
+            if matches!(component,Component::Prefix(_)){continue;}
+            let file=open(&path,true)?;
+            audit(&file,path==root || path==root.join("resources"))?;
+            files.push(file);
+        }
+        let app=open(&executable,false)?;audit(&app,true)?;files.push(app);
+        let mut script=OpenOptions::new().read(true).access_mode(0x80020000).share_mode(1).custom_flags(0x00200000).open(&wrapper).map_err(|_|UNTRUSTED)?;
+        let md=script.metadata().map_err(|_|UNTRUSTED)?;
+        if !md.is_file() || md.file_attributes()&0x400!=0 || md.len()>65536{return Err(UNTRUSTED);}
+        audit(&script,true)?;
+        let mut information=BY_HANDLE_FILE_INFORMATION::default();
+        unsafe{GetFileInformationByHandle(handle(&script),&mut information)}.map_err(|_|UNTRUSTED)?;
+        if information.nNumberOfLinks!=1{return Err(UNTRUSTED);}
+        let mut bytes=Vec::new();Read::by_ref(&mut script).take(65537).read_to_end(&mut bytes).map_err(|_|UNTRUSTED)?;
+        if bytes.len()>65536 || hex::encode(Sha256::digest(&bytes))!=expected_hash{return Err("kiosk_control_wrapper_mismatch");}
+        files.push(script);
+        Ok(FixedKiosk{wrapper,executable,_files:files})
+    }
     fn lexical(a: &Path, b: &Path) -> bool {
         let valid = |p: &Path| {
             p.is_absolute()
@@ -393,6 +428,9 @@ mod local {
         Err("management_verification_unavailable")
     }
 }
+
+#[cfg(windows)]
+pub(crate) use local::{pin_kiosk, FixedKiosk};
 pub fn verify(gate: &Gate, token: &str) -> Result<VerifiedGrant, &'static str> {
     #[cfg(windows)]
     {

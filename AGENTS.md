@@ -6,6 +6,7 @@
 * LetMeUp remote access starts at `https://kiosk.letmeup.co.kr`; ClassUp remote access starts at `https://ops.classup.io`. Opening a separate remote-support console does not complete device-specific integration.
 * Preserve existing remote recovery access until the approved pilot devices demonstrate unattended connection and reconnection. Source recovery, a successful build, and a real device connection are separate verification outcomes.
 * Headless automation reuses the existing authenticated terminal protocol. Credentials and commands enter through redirected stdin only; never enable permissions, retry uncertain commands, or treat connection acceptance as command completion. See `docs/headless-terminal.md`.
+* Kiosk approvals use only the fixed, capability-gated non-PTY protocol in `docs/kiosk-control-stdin.md`. Never put approval/token data in a terminal command or EncodedCommand. Probe is not hardware identity or proof of no active delivery; uncertain execution is never retried automatically.
 
 ## Project Layout
 

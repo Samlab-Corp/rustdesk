@@ -1757,6 +1757,7 @@ pub struct LoginConfigHandler {
     pub ephemeral: bool,
     // Memory-only mode marker; never serialized in peer configuration.
     pub native_management: Option<NativeManagementSession>,
+    pub kiosk_control: Option<KioskControlSession>,
     id: String,
     pub conn_type: ConnType,
     pub is_terminal_admin: bool,
@@ -2783,6 +2784,10 @@ impl LoginConfigHandler {
                 if let Some(management) = self.native_management.as_ref() {
                     terminal.service_id.clear();
                     terminal.native_management = Some(management.clone()).into();
+                }
+                if let Some(control) = self.kiosk_control.as_ref() {
+                    terminal.service_id.clear();
+                    terminal.kiosk_control = Some(control.clone()).into();
                 }
                 lr.set_terminal(terminal);
             }

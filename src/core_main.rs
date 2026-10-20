@@ -79,6 +79,15 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(target_os = "windows")]
+    if args.first().map(String::as_str) == Some("--kiosk-control-helper") {
+        // Handle this mode before log/crash-dump initialization. Only a random
+        // pipe suffix and the service PID are arguments; payload stays on stdin.
+        log::set_max_level(log::LevelFilter::Off);
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = crate::server::terminal_helper::kiosk_bridge::run(&args[1..]);
+        return None;
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
         #[cfg(target_os = "linux")]
