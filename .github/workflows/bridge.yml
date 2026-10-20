@@ -98,6 +98,29 @@ jobs:
           fi
           pushd flutter && flutter pub get && popd
 
+      - name: Validate bridge cargo metadata
+        shell: bash
+        run: |
+          # codegen 1.80.1 calls MetadataCommand with only this manifest path.
+          # Preserve its underlying Cargo error before its unwrap hides it.
+          mkdir -p bridge-diagnostics
+          if cargo metadata --format-version 1 --manifest-path ./Cargo.toml \
+            > bridge-diagnostics/metadata.json 2> bridge-diagnostics/metadata.stderr; then
+            echo "Cargo metadata resolved successfully."
+          else
+            status=$?
+            cat bridge-diagnostics/metadata.stderr >&2
+            exit "$status"
+          fi
+
+      - name: Upload bridge metadata failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: metadata-failure-${{ matrix.job.artifact-name }}
+          path: bridge-diagnostics/
+          if-no-files-found: ignore
+
       - name: Run flutter rust bridge
         run: |
           ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h

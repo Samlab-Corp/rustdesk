@@ -415,7 +415,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: nightly-2023-10-13-${{ matrix.job.target }} # must use nightly here, because of abi_thiscall feature required
+          toolchain: nightly-2023-10-13-x86_64-pc-windows-msvc # Keep the Sciter ABI nightly; i686 is the compilation target, not the runner host.
           targets: ${{ matrix.job.target }}
           components: "rustfmt"
 
