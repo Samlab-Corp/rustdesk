@@ -939,6 +939,9 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
+    if SAMLAB_DISABLE_STOCK_UPDATE {
+        return;
+    }
     if is_custom_client() {
         return;
     }
@@ -952,6 +955,10 @@ pub fn check_software_update() {
 // Because the url is always `https://api.rustdesk.com/version/latest`.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    if SAMLAB_DISABLE_STOCK_UPDATE {
+        SOFTWARE_UPDATE_URL.lock().unwrap().clear();
+        return Ok(());
+    }
     let (request, url) =
         hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
     let proxy_conf = Config::get_socks();
@@ -2080,7 +2087,30 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+const SAMLAB_DISABLE_STOCK_UPDATE: bool = true;
+
+fn apply_samlab_defaults() {
+    config::DEFAULT_DISPLAY_SETTINGS
+        .write()
+        .unwrap()
+        .insert("view_style".to_owned(), "adaptive".to_owned());
+    if SAMLAB_DISABLE_STOCK_UPDATE {
+        config::OVERWRITE_SETTINGS
+            .write()
+            .unwrap()
+            .insert("allow-auto-update".to_owned(), "N".to_owned());
+    }
+}
+
+pub fn is_letmeup_hide_cm() -> bool {
+    config::fixed_id().is_some()
+        && Config::get_option("letmeup-hide-cm") != "N"
+        && hbb_common::password_security::approve_mode()
+            != hbb_common::password_security::ApproveMode::Click
+}
+
 pub fn load_custom_client() {
+    apply_samlab_defaults();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

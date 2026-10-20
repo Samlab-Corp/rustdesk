@@ -408,14 +408,15 @@ jobs:
           submodules: recursive
 
       - name: Install LLVM and Clang
-        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: ${{ env.LLVM_VERSION }}
+          arch: x64 # bindgen loads libclang into the x64 Rust build-script host; the output target remains i686.
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: nightly-2023-10-13-${{ matrix.job.target }} # must use nightly here, because of abi_thiscall feature required
+          toolchain: nightly-2023-10-13-x86_64-pc-windows-msvc # Keep the Sciter ABI nightly; i686 is the compilation target, not the runner host.
           targets: ${{ matrix.job.target }}
           components: "rustfmt"
 
@@ -450,6 +451,17 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
 
+      - name: Select target libsodium for x86 cross-compilation
+        # libsodium-sys 0.2.x selects its bundled MSVC library by the build-script
+        # host width. Override only the i686 target's links metadata: a global
+        # SODIUM_LIB_DIR would also break the x64 build-script dependencies.
+        shell: bash
+        run: |
+          sodium_lib_dir="$(cygpath -m "$VCPKG_ROOT")/installed/${{ matrix.job.vcpkg-triplet }}/lib"
+          test -f "$sodium_lib_dir/libsodium.lib"
+          printf '\n[target.%s.sodium]\nrustc-link-lib = ["static=libsodium"]\nrustc-link-search = ["%s"]\n' \
+            '${{ matrix.job.target }}' "$sodium_lib_dir" >> .cargo/config.toml
+
       - name: Build rustdesk
         id: build
         shell: bash
@@ -458,9 +470,9 @@ jobs:
           # Patch sciter x86
           sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
           cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
-          cargo build --locked --features inline,vram,hwcodec --release --bins
+          cargo build --locked --features inline,vram,hwcodec --release --bins --target ${{ matrix.job.target }}
           mkdir -p ./Release
-          mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
+          mv ./target/${{ matrix.job.target }}/release/rustdesk.exe ./Release/rustdesk.exe
           curl -LJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
           echo "output_folder=./Release" >> $GITHUB_OUTPUT
           curl -LJ -o ./usbmmidd_v2.zip https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
@@ -507,10 +519,10 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe
+          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe --target ${{ matrix.job.target }}
           popd
           mkdir -p ./SignOutput
-          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
+          mv ./target/${{ matrix.job.target }}/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'

@@ -16,6 +16,7 @@ on:
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
+  FLUTTER_RUST_VERSION: "1.99.0" # webrtc-util 0.12 needs usize::is_multiple_of (Rust 1.87+); matches validated device identity tests.
   RUST_VERSION: "1.75" # sciter failed on m1 with 1.78 because of https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
   MAC_RUST_VERSION: "1.81" # 1.81 is requred for macos, because of https://github.com/yury/cidre requires 1.81
   CARGO_NDK_VERSION: "3.1.2"
@@ -197,13 +198,18 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          toolchain: ${{ env.FLUTTER_RUST_VERSION }}
           targets: ${{ matrix.job.target }}
           components: "rustfmt"
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           prefix-key: ${{ matrix.job.os }}
+
+      - name: Test device identity configuration
+        shell: bash
+        run: |
+          cargo test --locked -p hbb_common config:: --lib --target ${{ matrix.job.target }}
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
