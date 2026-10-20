@@ -11,3 +11,5 @@ Company sources are `Samlab-Corp/rustdesk` and `Samlab-Corp/hbb_common`, with th
 LetMeUp remote access starts at `https://kiosk.letmeup.co.kr` and ClassUp remote access starts at `https://ops.classup.io`. A separate console opening, source recovery, or a successful build does not establish a real unattended device connection. Preserve existing recovery access until approved pilot devices pass connection and reconnection checks.
 
 * Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.
+
+Guardian reenrollment follows [docs/guardian-reenrollment.md](docs/guardian-reenrollment.md): separate purpose-bound SYSTEM RPC, actual capability before grant, protected pinned Guardian, one durable provider CAS, and public receipts only. An uncertain delivery is never retried; existing installation/manual password semantics remain unchanged.

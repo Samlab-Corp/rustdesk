@@ -1750,6 +1750,8 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn handle_native_management_result(&self, _response: NativeManagementResult) {}
     fn handle_kiosk_control_capability(&self, _response: KioskControlCapability) {}
     fn handle_kiosk_control_result(&self, _response: KioskControlResult) {}
+    fn handle_reenrollment_capability(&self, _response: ReenrollmentCapability) {}
+    fn handle_reenrollment_result(&self, _response: ReenrollmentResult) {}
 }
 
 impl<T: InvokeUiSession> Deref for Session<T> {

@@ -1,3 +1,6 @@
+#[cfg(windows)]
+#[path = "reenrollment_peer.rs"]
+pub(crate) mod reenrollment_peer;
 #[path = "ipc/auth.rs"]
 mod ipc_auth;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -297,6 +300,8 @@ pub enum DataPortableService {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum Data {
+    #[cfg(windows)]
+    ReenrollmentPassword(crate::reenrollment_password::Frame),
     Login {
         id: i32,
         is_file_transfer: bool,
@@ -719,6 +724,12 @@ impl Drop for CheckIfRestart {
 
 async fn handle(data: Data, stream: &mut Connection) {
     match data {
+        #[cfg(windows)]
+        Data::ReenrollmentPassword(frame)=>{
+            let system=ipc_auth::reenrollment_peer_is_system(stream);
+            let result=tokio::task::spawn_blocking(move||crate::reenrollment_password::respond(frame,system)).await;
+            if let Ok(result)=result{allow_err!(stream.send(&Data::ReenrollmentPassword(result)).await);}
+        }
         Data::SystemInfo(_) => {
             let info = format!(
                 "log_path: {}, config: {}, username: {}",
@@ -1363,6 +1374,11 @@ pub async fn connect(ms_timeout: u64, postfix: &str) -> ResultType<ConnectionTmp
         let path = Config::ipc_path(postfix);
         connect_with_path(ms_timeout, &path).await
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn reenrollment_service_verified(stream:&ConnectionTmpl<ConnClient>)->Result<crate::ipc::reenrollment_peer::Pin,&'static str>{
+    crate::ipc::reenrollment_peer::Pin::open(stream)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

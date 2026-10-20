@@ -64,7 +64,7 @@ pub(crate) fn apply_in_service(password: &str, administrator: bool, verify_only:
         server_verified: company_server_verified(),
     }
 }
-fn company_server_verified() -> bool {
+pub(crate) fn company_server_verified() -> bool {
     // Match the service mediator's get_rendezvous_servers()/get_key(true) inputs,
     // including executable-name and persisted overrides. Never change them here.
     let executable_key = crate::platform::windows::get_license_from_exe_name()

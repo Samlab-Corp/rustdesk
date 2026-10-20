@@ -76,6 +76,13 @@ mod native_management;
 mod kiosk_control_policy;
 mod kiosk_control_payload;
 mod kiosk_control;
+mod reenrollment_policy;
+mod reenrollment_payload;
+mod reenrollment;
+#[cfg(windows)]
+pub mod headless_reenrollment;
+#[cfg(windows)]
+pub mod reenrollment_password;
 #[cfg(windows)]
 pub mod headless_kiosk_control;
 

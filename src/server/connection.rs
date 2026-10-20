@@ -322,6 +322,7 @@ pub struct Connection {
     terminal: bool,
     native_management: Option<crate::native_management::Session>,
     kiosk_control: Option<crate::kiosk_control::Session>,
+    reenrollment: Option<crate::reenrollment::Session>,
     port_forward_socket: Option<Framed<TcpStream, BytesCodec>>,
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
@@ -529,6 +530,7 @@ impl Connection {
             terminal: false,
             native_management: None,
             kiosk_control: None,
+            reenrollment: None,
             port_forward_socket: None,
             port_forward_address: "".to_owned(),
             tx_to_cm,
@@ -2025,7 +2027,9 @@ impl Connection {
             }
         } else if self.terminal {
             self.keyboard = false;
-            if let Some(control) = self.kiosk_control.as_ref() {
+            if let Some(v) = self.reenrollment.as_ref() {
+                if let Some(c) = v.capability() { let mut response=Message::new();response.set_reenrollment_capability(c);self.send(response).await; }
+            } else if let Some(control) = self.kiosk_control.as_ref() {
                 if let Some(capability) = control.capability() {
                     let mut response = Message::new();
                     response.set_kiosk_control_capability(capability);
@@ -2187,7 +2191,7 @@ impl Connection {
     }
 
     fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
-        if self.native_management.is_some() || self.kiosk_control.is_some() { return; } // Dedicated non-UI protocols.
+        if self.native_management.is_some() || self.kiosk_control.is_some() || self.reenrollment.is_some() { return; } // Dedicated non-UI protocols.
         self.send_to_cm(ipc::Data::Login {
             id: self.inner.id(),
             is_file_transfer: self.file_transfer.is_some(),
@@ -2540,6 +2544,7 @@ impl Connection {
         self.terminal = false;
         self.native_management = None;
         self.kiosk_control = None;
+        self.reenrollment = None;
         self.port_forward_address.clear();
         self.terminal_persistent = false;
     }
@@ -2569,7 +2574,7 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_start_cm_ipc(&mut self) {
-        if self.native_management.is_some() || self.kiosk_control.is_some() { return; }
+        if self.native_management.is_some() || self.kiosk_control.is_some() || self.reenrollment.is_some() { return; }
         if let Some(p) = self.start_cm_ipc_para.take() {
             tokio::spawn(async move {
                 #[cfg(windows)]
@@ -2606,13 +2611,21 @@ impl Connection {
         if let Some(message::Union::Misc(misc)) = &msg.union {
             // Move the CloseReason forward, as this message needs to be received when unauthorized, especially for kcp.
             if let Some(misc::Union::CloseReason(s)) = &misc.union {
-                if self.native_management.is_none() && self.kiosk_control.is_none() { log::info!("receive close reason: {}", s); }
+                if self.native_management.is_none() && self.kiosk_control.is_none() && self.reenrollment.is_none() { log::info!("receive close reason: {}", s); }
                 self.on_close("Peer close", true).await;
                 raii::AuthedConnID::check_remove_session(self.inner.id(), self.session_key());
                 return false;
             }
         }
         if self.authorized {
+            if self.reenrollment.is_some() {
+                if let Some(message::Union::ReenrollmentExecute(input)) = msg.union.as_ref() {
+                    let result=self.reenrollment.as_mut().unwrap().execute(input.clone()).await;
+                    let mut response=Message::new();response.set_reenrollment_result(result);self.send(response).await;
+                    return false;
+                }
+                if !Self::is_connection_housekeeping_message(&msg) {self.reenrollment.as_mut().unwrap().reject_input();return false;}
+            }
             if self.kiosk_control.is_some() {
                 if let Some(message::Union::KioskControlExecute(input)) = msg.union.as_ref() {
                     let result = match self.kiosk_control.as_mut() {
@@ -2700,6 +2713,14 @@ impl Connection {
                     }
 
                     self.terminal = true;
+                    let dedicated = terminal.reenrollment.is_some() as u8 + terminal.kiosk_control.is_some() as u8 + terminal.native_management.is_some() as u8;
+                    if dedicated > 1 { self.send_login_error("reenrollment_protocol_rejected").await; return false; }
+                    if let Some(v) = terminal.reenrollment.as_ref() {
+                        if !self.stream.is_secured() || !lr.os_login.username.is_empty() || !lr.os_login.password.is_empty() || !terminal.service_id.is_empty() {
+                            self.send_login_error("reenrollment_protocol_rejected").await; return false;
+                        }
+                        match crate::reenrollment::Session::from_proto(v.clone()) { Ok(v)=>self.reenrollment=Some(v),Err(e)=>{self.send_login_error(e).await;return false;} }
+                    }
                     if let Some(control) = terminal.kiosk_control.as_ref() {
                         if !self.stream.is_secured() || terminal.native_management.is_some()
                             || !lr.os_login.username.is_empty() || !lr.os_login.password.is_empty()
@@ -2760,6 +2781,7 @@ impl Connection {
             #[cfg(target_os = "windows")]
             if self.terminal
                 && self.native_management.is_none()
+                && self.reenrollment.is_none()
                 && lr.os_login.username.trim().is_empty()
                 && crate::platform::is_prelogin()
             {
@@ -2855,7 +2877,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.native_management.is_none() && self.kiosk_control.is_none() && self.is_recent_session(false) {
+            } else if self.native_management.is_none() && self.kiosk_control.is_none() && self.reenrollment.is_none() && self.is_recent_session(false) {
                 if err_msg.is_empty() {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
@@ -2904,6 +2926,7 @@ impl Connection {
                 } else {
                     if let Some(management) = self.native_management.as_mut() { management.password_verified(); }
                     if let Some(control) = self.kiosk_control.as_mut() { control.password_verified(); }
+                    if let Some(v) = self.reenrollment.as_mut() { v.password_verified(); }
                     self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
                     if err_msg.is_empty() {
                         #[cfg(target_os = "linux")]
@@ -3955,6 +3978,10 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     async fn prepare_terminal_login_for_authorization(&mut self) -> Option<bool> {
+        if let Some(v)=self.reenrollment.as_mut() {
+            if let Err(e)=v.prepare(Config::get_id()) {self.send_login_error(e).await;return Some(false);}
+            return None;
+        }
         if self.kiosk_control.is_some() {
             #[cfg(windows)] {
                 if self.terminal_user_token.is_none() {
