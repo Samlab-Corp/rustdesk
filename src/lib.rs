@@ -67,6 +67,14 @@ mod ui_session_interface;
 pub mod headless_terminal;
 
 #[cfg(target_os = "windows")]
+pub mod headless_management;
+
+mod native_management_policy;
+mod native_management_guardian;
+mod native_management_executor;
+mod native_management;
+
+#[cfg(target_os = "windows")]
 pub mod installer_password;
 
 mod hbbs_http;

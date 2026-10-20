@@ -7,3 +7,5 @@ Headless terminal automation follows [docs/headless-terminal.md](docs/headless-t
 Company sources are `Samlab-Corp/rustdesk` and `Samlab-Corp/hbb_common`, with the common library pinned to an available company commit. Validated development changes use `release/next`; Windows test builds use `samlab-windows.yml`.
 
 LetMeUp remote access starts at `https://kiosk.letmeup.co.kr` and ClassUp remote access starts at `https://ops.classup.io`. A separate console opening, source recovery, or a successful build does not establish a real unattended device connection. Preserve existing recovery access until approved pilot devices pass connection and reconnection checks.
+
+* Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.
