@@ -886,9 +886,9 @@ async fn handle(data: Data, stream: &mut Connection) {
             }
             Some(value) => {
                 #[cfg(windows)]
-                if name == crate::installer_password::IPC_NAME {
+                if name == crate::installer_password::IPC_NAME || name == crate::installer_password::VERIFY_IPC_NAME {
                     let (authorized, _, _, _, system, elevated) = stream.server_authorization_status();
-                    let result = crate::installer_password::apply_in_service(&value, authorized && (system || elevated));
+                    let result = crate::installer_password::apply_in_service(&value, authorized && (system || elevated), name == crate::installer_password::VERIFY_IPC_NAME);
                     if let Ok(json) = serde_json::to_string(&result) {
                         allow_err!(stream.send(&Data::Config((name, Some(json)))).await);
                     }

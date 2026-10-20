@@ -1,6 +1,22 @@
 //! Installer policy, independent of GUI, IPC and live configuration.
 pub const MAX_SECRET_BYTES: usize = 256;
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+pub fn company_server_matches(
+    servers: &[String],
+    active: &str,
+    key: &str,
+    expected_key: &str,
+) -> bool {
+    fn valid_host(host: &str) -> bool {
+        host.eq_ignore_ascii_case("r.letmeup.shop")
+            || host.eq_ignore_ascii_case("r.letmeup.shop:21116")
+    }
+    servers.len() == 1
+        && valid_host(&servers[0])
+        && valid_host(active)
+        && !expected_key.is_empty()
+        && key == expected_key
+}
 pub fn read_config(path: &std::path::Path) -> std::io::Result<String> {
     use std::io::Read;
     let mut text = String::new();
@@ -28,7 +44,45 @@ pub struct Outcome {
     pub daemon_accepted: bool,
     pub permanent_password_set: bool,
     pub persisted: bool,
+    pub matches: bool,
+    pub server_verified: bool,
     pub reason: &'static str,
+}
+pub fn confirmed_outcome(
+    id: String,
+    accepted: bool,
+    enabled: bool,
+    persisted: bool,
+    matches: bool,
+    conflict: bool,
+    server_verified: bool,
+) -> Outcome {
+    let reason = if !server_verified {
+        "server_unverified"
+    } else if conflict {
+        "existing_password_conflict"
+    } else if !accepted {
+        "daemon_rejected"
+    } else if !valid_id(&id) {
+        "device_id_unconfirmed"
+    } else if !matches {
+        "password_mismatch"
+    } else if !enabled {
+        "password_state_unconfirmed"
+    } else if !persisted {
+        "persistence_unconfirmed"
+    } else {
+        "configured"
+    };
+    Outcome {
+        id: if valid_id(&id) { id } else { String::new() },
+        daemon_accepted: accepted,
+        permanent_password_set: enabled,
+        persisted,
+        matches,
+        server_verified,
+        reason,
+    }
 }
 impl Outcome {
     pub fn failure(reason: &'static str) -> Self {
@@ -37,6 +91,8 @@ impl Outcome {
             daemon_accepted: false,
             permanent_password_set: false,
             persisted: false,
+            matches: false,
+            server_verified: false,
             reason,
         }
     }
@@ -44,6 +100,8 @@ impl Outcome {
         if self.daemon_accepted
             && self.permanent_password_set
             && self.persisted
+            && self.matches
+            && self.server_verified
             && valid_id(&self.id)
             && self.reason == "configured"
         {
@@ -100,6 +158,52 @@ mod tests {
             administrator: true,
             settings_allowed: true,
         }
+    }
+    #[test]
+    fn company_host_and_key_must_match_including_effective_overrides() {
+        let servers = vec!["r.letmeup.shop".to_owned()];
+        assert!(company_server_matches(
+            &servers,
+            "r.letmeup.shop:21116",
+            "fixture-key",
+            "fixture-key"
+        ));
+        for host in [
+            "other.example",
+            "r.letmeup.shop.example",
+            "r.letmeup.shop:21117",
+        ] {
+            assert!(!company_server_matches(
+                &servers,
+                host,
+                "fixture-key",
+                "fixture-key"
+            ));
+            assert!(!company_server_matches(
+                &[host.to_owned()],
+                "r.letmeup.shop:21116",
+                "fixture-key",
+                "fixture-key"
+            ));
+        }
+        assert!(!company_server_matches(
+            &servers,
+            "r.letmeup.shop:21116",
+            "other-key",
+            "fixture-key"
+        ));
+        assert!(!company_server_matches(
+            &[],
+            "r.letmeup.shop:21116",
+            "fixture-key",
+            "fixture-key"
+        ));
+    }
+    #[test]
+    fn unverified_server_blocks_even_otherwise_complete_result() {
+        let outcome = confirmed_outcome("123456789".into(), true, true, true, true, false, false);
+        assert_eq!(outcome.reason, "server_unverified");
+        assert_ne!(outcome.exit_code(), 0);
     }
     struct Fixture(std::path::PathBuf);
     impl Fixture {
@@ -218,12 +322,27 @@ mod tests {
         assert_ne!(result.exit_code(), 0);
     }
     #[test]
+    fn readonly_mismatch_is_distinct_from_mutation_rejection() {
+        let outcome = confirmed_outcome("123456789".into(), true, true, false, false, false, true);
+        assert!(outcome.daemon_accepted);
+        assert_eq!(outcome.reason, "password_mismatch");
+        assert_ne!(outcome.exit_code(), 0);
+    }
+    #[test]
+    fn existing_password_conflict_never_reports_installation_success() {
+        let outcome = confirmed_outcome("123456789".into(), false, true, false, false, true, true);
+        assert_eq!(outcome.reason, "existing_password_conflict");
+        assert_ne!(outcome.exit_code(), 0);
+    }
+    #[test]
     fn accepted_memory_state_without_disk_evidence_is_not_success() {
         let result = Outcome {
             id: "123456789".into(),
             daemon_accepted: true,
             permanent_password_set: true,
             persisted: false,
+            matches: true,
+            server_verified: true,
             reason: "persistence_unconfirmed",
         };
         assert_ne!(result.exit_code(), 0);
@@ -235,6 +354,8 @@ mod tests {
             daemon_accepted: true,
             permanent_password_set: true,
             persisted: true,
+            matches: true,
+            server_verified: true,
             reason: "configured",
         };
         assert_eq!(result.exit_code(), 0);

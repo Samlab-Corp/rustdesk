@@ -153,7 +153,7 @@ pub fn core_main() -> Option<Vec<String>> {
         crate::portable_service::client::set_quick_support(_is_quick_support);
     }
     #[cfg(windows)]
-    if args.first().map(String::as_str) == Some("--set-permanent-password-stdin") {
+    if matches!(args.first().map(String::as_str), Some("--set-permanent-password-stdin" | "--verify-permanent-password-stdin")) {
         std::process::exit(crate::installer_password::run(&args));
     }
     let mut log_name = "".to_owned();

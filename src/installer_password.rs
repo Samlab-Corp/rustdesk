@@ -4,6 +4,7 @@ mod policy;
 use hbb_common::config::Config;
 use serde::{Deserialize, Serialize};
 pub const IPC_NAME: &str = "installer-permanent-password";
+pub const VERIFY_IPC_NAME: &str = "installer-verify-permanent-password";
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Status {
@@ -11,6 +12,9 @@ pub(crate) struct Status {
     daemon_accepted: bool,
     permanent_password_set: bool,
     persisted: bool,
+    matches: bool,
+    conflict: bool,
+    server_verified: bool,
 }
 fn status_failure() -> Status {
     Status {
@@ -18,11 +22,14 @@ fn status_failure() -> Status {
         daemon_accepted: false,
         permanent_password_set: false,
         persisted: false,
+        matches: false,
+        conflict: false,
+        server_verified: false,
     }
 }
 // Existing main-IPC executable authorization is retained; this operation additionally
 // requires an elevated peer and must run inside the installed SYSTEM service.
-pub(crate) fn apply_in_service(password: &str, administrator: bool) -> Status {
+pub(crate) fn apply_in_service(password: &str, administrator: bool, verify_only: bool) -> Status {
     if !administrator
         || !crate::platform::is_root()
         || crate::core_main::is_cli_setting_change_disabled()
@@ -31,17 +38,53 @@ pub(crate) fn apply_in_service(password: &str, administrator: bool) -> Status {
     {
         return status_failure();
     }
-    let accepted = Config::set_permanent_password(password);
-    let permanent_set = accepted
-        && Config::has_permanent_password()
-        && hbb_common::password_security::permanent_enabled();
-    let persisted = accepted && verify_service_disk_password(password);
+    if !company_server_verified() {
+        return status_failure();
+    }
+    let update = if verify_only {
+        None
+    } else {
+        Some(Config::set_permanent_password_if_blank_or_same(password))
+    };
+    let conflict = update == Some(hbb_common::config::PermanentPasswordUpdate::Conflict);
+    let accepted =
+        verify_only || update == Some(hbb_common::config::PermanentPasswordUpdate::Accepted);
+    let matches = Config::permanent_password_matches(password);
+    let permanent_set =
+        Config::has_permanent_password() && hbb_common::password_security::permanent_enabled();
+    let persisted = accepted && matches && verify_service_disk_password(password);
     Status {
-        id: Config::get_id(),
+        // get_id() may generate and persist a missing ID; verification must not.
+        id: Config::get_id_or(String::new()),
         daemon_accepted: accepted,
         permanent_password_set: permanent_set,
         persisted,
+        matches,
+        conflict,
+        server_verified: company_server_verified(),
     }
+}
+fn company_server_verified() -> bool {
+    // Match the service mediator's get_rendezvous_servers()/get_key(true) inputs,
+    // including executable-name and persisted overrides. Never change them here.
+    let executable_key = crate::platform::windows::get_license_from_exe_name()
+        .ok()
+        .map(|license| license.key)
+        .filter(|key| !key.is_empty());
+    let key = executable_key.unwrap_or_else(|| {
+        let configured = Config::get_option("key");
+        if configured.is_empty() {
+            hbb_common::config::RS_PUB_KEY.to_owned()
+        } else {
+            configured
+        }
+    });
+    policy::company_server_matches(
+        &Config::get_rendezvous_servers(),
+        &Config::get_rendezvous_server(),
+        &key,
+        hbb_common::config::RS_PUB_KEY,
+    )
 }
 fn verify_service_disk_password(password: &str) -> bool {
     // The existing setter logs storage errors rather than returning them. Its ACK
@@ -88,15 +131,20 @@ fn read_secret() -> Result<String, &'static str> {
         .map_err(|_| "input_timeout")?
 }
 #[tokio::main(flavor = "current_thread")]
-async fn set_password(password: &str) -> policy::Outcome {
+async fn request_password(password: &str, verify_only: bool) -> policy::Outcome {
+    let ipc_name = if verify_only {
+        VERIFY_IPC_NAME
+    } else {
+        IPC_NAME
+    };
     let result = async {
         let mut connection = crate::ipc::connect(1000, "").await.ok()?;
         connection
-            .send_config(IPC_NAME, password.to_owned())
+            .send_config(ipc_name, password.to_owned())
             .await
             .ok()?;
         match connection.next_timeout(3000).await.ok()? {
-            Some(crate::ipc::Data::Config((name, Some(value)))) if name == IPC_NAME => {
+            Some(crate::ipc::Data::Config((name, Some(value)))) if name == ipc_name => {
                 serde_json::from_str::<Status>(&value).ok()
             }
             _ => None,
@@ -104,36 +152,22 @@ async fn set_password(password: &str) -> policy::Outcome {
     }
     .await;
     match result {
-        Some(status) => {
-            let reason = if !status.daemon_accepted {
-                "daemon_rejected"
-            } else if !policy::valid_id(&status.id) {
-                "device_id_unconfirmed"
-            } else if !status.permanent_password_set {
-                "password_state_unconfirmed"
-            } else if !status.persisted {
-                "persistence_unconfirmed"
-            } else {
-                "configured"
-            };
-            policy::Outcome {
-                id: if policy::valid_id(&status.id) {
-                    status.id
-                } else {
-                    String::new()
-                },
-                daemon_accepted: status.daemon_accepted,
-                permanent_password_set: status.permanent_password_set,
-                persisted: status.persisted,
-                reason,
-            }
-        }
+        Some(status) => policy::confirmed_outcome(
+            status.id,
+            status.daemon_accepted,
+            status.permanent_password_set,
+            status.persisted,
+            status.matches,
+            status.conflict,
+            status.server_verified,
+        ),
         None => policy::Outcome::failure("daemon_response_unconfirmed"),
     }
 }
 pub fn run(args: &[String]) -> i32 {
     hbb_common::log::set_max_level(hbb_common::log::LevelFilter::Off);
     std::panic::set_hook(Box::new(|_| {}));
+    let verify_only = args.first().map(String::as_str) == Some("--verify-permanent-password-stdin");
     let outcome = if args.len() != 1 {
         policy::Outcome::failure("invalid_arguments")
     } else {
@@ -146,12 +180,12 @@ pub fn run(args: &[String]) -> i32 {
                     && !Config::is_disable_change_permanent_password(),
             },
             read_secret,
-            set_password,
+            |password| request_password(password, verify_only),
         )
     };
     println!(
         "{}",
-        serde_json::json!({"id":outcome.id,"daemonAccepted":outcome.daemon_accepted,
+        serde_json::json!({"id":outcome.id,"daemonAccepted":outcome.daemon_accepted,"matches":outcome.matches,"serverVerified":outcome.server_verified,
         "permanentPasswordSet":outcome.permanent_password_set,"persisted":outcome.persisted,"reason":outcome.reason})
     );
     outcome.exit_code()
