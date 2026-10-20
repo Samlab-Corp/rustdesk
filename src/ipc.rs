@@ -885,6 +885,15 @@ async fn handle(data: Data, stream: &mut Connection) {
                 allow_err!(stream.send(&Data::Config((name, value))).await);
             }
             Some(value) => {
+                #[cfg(windows)]
+                if name == crate::installer_password::IPC_NAME || name == crate::installer_password::VERIFY_IPC_NAME {
+                    let administrator = ipc_auth::installer_peer_is_administrator(stream);
+                    let result = crate::installer_password::apply_in_service(&value, administrator, name == crate::installer_password::VERIFY_IPC_NAME);
+                    if let Ok(json) = serde_json::to_string(&result) {
+                        allow_err!(stream.send(&Data::Config((name, Some(json)))).await);
+                    }
+                    return;
+                }
                 let mut updated = true;
                 if name == "id" {
                     // An empty id would wipe the local id and unconfirm the key (cf. #15626).

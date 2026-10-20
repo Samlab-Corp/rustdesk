@@ -152,6 +152,10 @@ pub fn core_main() -> Option<Vec<String>> {
                 || (!click_setup && crate::platform::is_elevated(None).unwrap_or(false)));
         crate::portable_service::client::set_quick_support(_is_quick_support);
     }
+    #[cfg(windows)]
+    if matches!(args.first().map(String::as_str), Some("--set-permanent-password-stdin" | "--verify-permanent-password-stdin")) {
+        std::process::exit(crate::installer_password::run(&args));
+    }
     let mut log_name = "".to_owned();
     // Keep portable-service logs under a stable directory name.
     let has_portable_service_shmem_arg = args
@@ -932,7 +936,7 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
 }
 
 #[inline]
-fn is_cli_setting_change_disabled() -> bool {
+pub(crate) fn is_cli_setting_change_disabled() -> bool {
     let option = config::keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED;
     let allow_command_line_settings =
         config::option2bool(option, &crate::get_builtin_option(option));

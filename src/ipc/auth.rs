@@ -716,6 +716,17 @@ pub(crate) fn authorize_windows_main_ipc_connection(stream: &Connection, postfix
 }
 
 #[cfg(windows)]
+pub(super) fn installer_peer_is_administrator(stream: &Connection) -> bool {
+    if !authorize_windows_main_ipc_connection(stream, "") {
+        return false;
+    }
+    let (authorized, peer_pid, _, _, system, _) = stream.server_authorization_status();
+    authorized && (system == Some(true) || peer_pid
+        .map(|pid| crate::platform::is_elevated(Some(pid)).unwrap_or(false))
+        .unwrap_or(false))
+}
+
+#[cfg(windows)]
 pub(crate) fn authorize_windows_portable_service_ipc_connection(
     stream: &Connection,
     postfix: &str,
