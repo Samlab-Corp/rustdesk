@@ -451,6 +451,16 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
 
+      - name: Select target libsodium for x86 cross-compilation
+        # libsodium-sys 0.2.x selects its bundled MSVC library by the build-script
+        # host width. This job has an x64 host and an i686 target, so use vcpkg's
+        # target library explicitly instead of the bundled x64 library.
+        shell: bash
+        run: |
+          sodium_lib_dir="$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib"
+          test -f "$sodium_lib_dir/libsodium.lib"
+          echo "SODIUM_LIB_DIR=$sodium_lib_dir" >> "$GITHUB_ENV"
+
       - name: Build rustdesk
         id: build
         shell: bash
