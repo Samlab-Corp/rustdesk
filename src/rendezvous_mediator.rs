@@ -778,6 +778,22 @@ impl RendezvousMediator {
     }
 
     async fn handle_uuid_mismatch(&mut self, socket: Sink<'_>) -> ResultType<()> {
+        // A provisioned device keeps its identity; resolve binding conflicts on the server.
+        if let Some(fixed) = hbb_common::config::fixed_id() {
+            static LAST_LOG: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+            let now = hbb_common::get_time();
+            let last = LAST_LOG.load(Ordering::SeqCst);
+            if now - last >= 60_000 {
+                LAST_LOG.store(now, Ordering::SeqCst);
+                log::warn!(
+                    "UUID_MISMATCH received from {} for fixed id {}; keeping id, resolve the binding on the server",
+                    self.host,
+                    fixed
+                );
+            }
+            Config::set_key_confirmed(false);
+            return Ok(());
+        }
         {
             let mut solving = SOLVING_PK_MISMATCH.lock().await;
             if solving.is_empty() || *solving == self.host {
