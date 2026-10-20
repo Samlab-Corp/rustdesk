@@ -1,5 +1,11 @@
 # RustDesk Guide
 
+## Samlab integration
+
+* Company sources are `Samlab-Corp/rustdesk` and `Samlab-Corp/hbb_common`. Keep the common library pinned to a commit available in the company repository. Use `release/next` for validated development changes and `samlab-windows.yml` for Windows test builds.
+* LetMeUp remote access starts at `https://kiosk.letmeup.co.kr`; ClassUp remote access starts at `https://ops.classup.io`. Opening a separate remote-support console does not complete device-specific integration.
+* Preserve existing remote recovery access until the approved pilot devices demonstrate unattended connection and reconnection. Source recovery, a successful build, and a real device connection are separate verification outcomes.
+
 ## Project Layout
 
 ### Directory Structure
