@@ -1576,6 +1576,7 @@ pub struct VideoHandler {
 impl VideoHandler {
     #[cfg(feature = "flutter")]
     pub fn get_adapter_luid() -> Option<i64> {
+        if crate::common::owned_viewer() { return None; }
         crate::flutter::get_adapter_luid()
     }
 
@@ -2684,7 +2685,11 @@ impl LoginConfigHandler {
         os_password: String,
         password: Vec<u8>,
     ) -> Message {
-        let my_id = Config::get_id();
+        let my_id = if crate::common::owned_viewer() {
+            Config::get_id_or(String::new())
+        } else {
+            Config::get_id()
+        };
         let (my_id, pure_id) = if let Some((id, _, _)) = self.other_server.as_ref() {
             let server = Config::get_rendezvous_server();
             (format!("{my_id}@{server}"), id.clone())
@@ -2915,7 +2920,7 @@ pub fn start_video_thread<F, T>(
     std::thread::spawn(move || {
         #[cfg(windows)]
         sync_cpu_usage();
-        get_hwcodec_config();
+        if !crate::common::owned_viewer() { get_hwcodec_config(); }
         let mut video_handler = None;
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
@@ -3129,6 +3134,7 @@ fn get_hwcodec_config() {
 
 #[cfg(windows)]
 fn sync_cpu_usage() {
+    if crate::common::owned_viewer() { return; }
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {

@@ -139,7 +139,7 @@ impl<T: InvokeUiSession> Remote<T> {
         #[cfg(target_os = "windows")]
         let _file_clip_context_holder = {
             // `is_port_forward()` will not reach here, but we still check it for clarity.
-            if self.handler.is_default() {
+            if self.handler.is_default() && !crate::common::owned_viewer() {
                 // It is ok to call this function multiple times.
                 ContextSend::enable(true);
                 Some(crate::SimpleCallOnReturn {
@@ -214,7 +214,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut rx_clip_client_holder = (Arc::new(TokioMutex::new(rx)), None);
                 #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
                 {
-                    if self.handler.is_default() {
+                    if self.handler.is_default() && !crate::common::owned_viewer() {
                         (self.client_conn_id, rx_clip_client_holder.0) =
                             clipboard::get_rx_cliprdr_client(&self.handler.get_id());
                         log::debug!("get cliprdr client for conn_id {}", self.client_conn_id);
@@ -371,12 +371,12 @@ impl<T: InvokeUiSession> Remote<T> {
             .set_disconnected(round);
 
         #[cfg(not(target_os = "ios"))]
-        if self.handler.is_default() && _set_disconnected_ok {
+        if self.handler.is_default() && !crate::common::owned_viewer() && _set_disconnected_ok {
             Client::try_stop_clipboard();
         }
 
         #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
-        if self.handler.is_default() && _set_disconnected_ok {
+        if self.handler.is_default() && !crate::common::owned_viewer() && _set_disconnected_ok {
             // Linux client cleanup runs synchronously in try_stop_clipboard() before FUSE is
             // unmounted. Keep this async path for other file-clipboard platforms.
             crate::clipboard::try_empty_clipboard_files(ClipboardSide::Client, self.client_conn_id);
@@ -1319,14 +1319,22 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+            // A viewer cannot receive file/clipboard/audio/printer/command traffic,
+            // even if a peer sends it despite the disabled negotiated options.
+            #[cfg(windows)]
+            if crate::common::owned_viewer() && !crate::viewer_policy::allowed_inbound(&msg_in) {
+                return true;
+            }
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
                         self.first_frame = true;
                         self.handler.close_success();
                         self.handler.adapt_size();
-                        self.send_toggle_virtual_display_msg(peer).await;
-                        self.send_toggle_privacy_mode_msg(peer).await;
+                        if !crate::common::owned_viewer() {
+                            self.send_toggle_virtual_display_msg(peer).await;
+                            self.send_toggle_privacy_mode_msg(peer).await;
+                        }
                     }
                     self.video_format = CodecFormat::from(&vf);
 
@@ -1337,6 +1345,16 @@ impl<T: InvokeUiSession> Remote<T> {
                     let Some(thread) = self.video_threads.get_mut(&display) else {
                         return true;
                     };
+                    #[cfg(windows)]
+                    if crate::common::owned_viewer() {
+                        let queue=thread.video_queue.write().unwrap();
+                        let replaced=!queue.is_empty();
+                        let wake=crate::viewer_policy::replace_latest(&queue,vf);
+                        drop(queue);
+                        if wake {thread.video_sender.send(MediaData::VideoQueue).ok();}
+                        if replaced {self.handler.refresh_video(display as _);}
+                        return true;
+                    }
                     if Self::contains_key_frame(&vf) {
                         thread
                             .video_sender
@@ -1386,7 +1404,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         self.handler.handle_peer_info(pi);
                         #[cfg(all(target_os = "windows", not(feature = "flutter")))]
                         self.check_clipboard_file_context();
-                        if self.handler.is_default() {
+                        if self.handler.is_default() && !crate::common::owned_viewer() {
                             #[cfg(feature = "flutter")]
                             #[cfg(not(target_os = "ios"))]
                             let rx = Client::try_start_clipboard(None);
@@ -2466,7 +2484,7 @@ impl<T: InvokeUiSession> Remote<T> {
         );
         self.video_threads.insert(display, video_thread);
         if self.video_threads.len() == 1 {
-            let auto_record =
+            let auto_record = !crate::common::owned_viewer() &&
                 LocalConfig::get_bool_option(config::keys::OPTION_ALLOW_AUTO_RECORD_OUTGOING);
             self.handler.lc.write().unwrap().record_state = auto_record;
             self.update_record_state();

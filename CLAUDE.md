@@ -2,6 +2,8 @@
 
 Follow [AGENTS.md](AGENTS.md) for source, build, and verification rules.
 
+Browser desktop viewing follows [docs/owned-viewer.md](docs/owned-viewer.md): separate fixed PC9 receiver, stdin-only credentials, bounded CPU JPEG, exact session/frame/permission gates and held-key release. Preserve installed ordinary-protocol hosts and never equate source/build proof with real viewing or hardware identity.
+
 Headless terminal automation follows [docs/headless-terminal.md](docs/headless-terminal.md): reuse existing authentication and permissions, stdin-only secrets, finite limits, and verified per-command completion. No GUI input or automatic retry of uncertain commands.
 
 Kiosk approvals follow [docs/kiosk-control-stdin.md](docs/kiosk-control-stdin.md): fixed current-user non-PTY worker, capability before sensitive payload, pinned ProgramFiles wrapper and no approval/token in command text or EncodedCommand. Probe is not hardware identity or absence-of-active-delivery evidence; unknown outcomes remain uncertain.

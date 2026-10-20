@@ -178,6 +178,8 @@ pub fn get_option<T: AsRef<str>>(key: T) -> String {
 
 #[inline]
 pub fn use_texture_render() -> bool {
+    #[cfg(windows)]
+    if crate::headless_viewer::active() { return false; }
     #[cfg(target_os = "android")]
     return false;
     #[cfg(target_os = "ios")]
