@@ -73,6 +73,11 @@ mod native_management_policy;
 mod native_management_guardian;
 mod native_management_executor;
 mod native_management;
+mod kiosk_control_policy;
+mod kiosk_control_payload;
+mod kiosk_control;
+#[cfg(windows)]
+pub mod headless_kiosk_control;
 
 #[cfg(target_os = "windows")]
 pub mod installer_password;

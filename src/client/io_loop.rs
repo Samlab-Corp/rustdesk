@@ -2127,6 +2127,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::NativeManagementChallenge(response)) => self.handler.handle_native_management_challenge(response),
                 Some(message::Union::NativeManagementResult(response)) => self.handler.handle_native_management_result(response),
+                Some(message::Union::KioskControlCapability(response)) => self.handler.handle_kiosk_control_capability(response),
+                Some(message::Union::KioskControlResult(response)) => self.handler.handle_kiosk_control_result(response),
                 _ => {}
             }
         }

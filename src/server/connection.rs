@@ -321,6 +321,7 @@ pub struct Connection {
     view_camera: bool,
     terminal: bool,
     native_management: Option<crate::native_management::Session>,
+    kiosk_control: Option<crate::kiosk_control::Session>,
     port_forward_socket: Option<Framed<TcpStream, BytesCodec>>,
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
@@ -527,6 +528,7 @@ impl Connection {
             view_camera: false,
             terminal: false,
             native_management: None,
+            kiosk_control: None,
             port_forward_socket: None,
             port_forward_address: "".to_owned(),
             tx_to_cm,
@@ -2023,7 +2025,13 @@ impl Connection {
             }
         } else if self.terminal {
             self.keyboard = false;
-            if let Some(management) = self.native_management.as_ref() {
+            if let Some(control) = self.kiosk_control.as_ref() {
+                if let Some(capability) = control.capability() {
+                    let mut response = Message::new();
+                    response.set_kiosk_control_capability(capability);
+                    self.send(response).await;
+                }
+            } else if let Some(management) = self.native_management.as_ref() {
                 if let Some(challenge) = management.challenge() {
                     let mut response = Message::new();
                     response.set_native_management_challenge(challenge);
@@ -2179,7 +2187,7 @@ impl Connection {
     }
 
     fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
-        if self.native_management.is_some() { return; } // No user-session UI dependency.
+        if self.native_management.is_some() || self.kiosk_control.is_some() { return; } // Dedicated non-UI protocols.
         self.send_to_cm(ipc::Data::Login {
             id: self.inner.id(),
             is_file_transfer: self.file_transfer.is_some(),
@@ -2531,6 +2539,7 @@ impl Connection {
         self.view_camera = false;
         self.terminal = false;
         self.native_management = None;
+        self.kiosk_control = None;
         self.port_forward_address.clear();
         self.terminal_persistent = false;
     }
@@ -2560,7 +2569,7 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_start_cm_ipc(&mut self) {
-        if self.native_management.is_some() { return; } // No explorer token or tray launch.
+        if self.native_management.is_some() || self.kiosk_control.is_some() { return; }
         if let Some(p) = self.start_cm_ipc_para.take() {
             tokio::spawn(async move {
                 #[cfg(windows)]
@@ -2597,13 +2606,29 @@ impl Connection {
         if let Some(message::Union::Misc(misc)) = &msg.union {
             // Move the CloseReason forward, as this message needs to be received when unauthorized, especially for kcp.
             if let Some(misc::Union::CloseReason(s)) = &misc.union {
-                if self.native_management.is_none() { log::info!("receive close reason: {}", s); }
+                if self.native_management.is_none() && self.kiosk_control.is_none() { log::info!("receive close reason: {}", s); }
                 self.on_close("Peer close", true).await;
                 raii::AuthedConnID::check_remove_session(self.inner.id(), self.session_key());
                 return false;
             }
         }
         if self.authorized {
+            if self.kiosk_control.is_some() {
+                if let Some(message::Union::KioskControlExecute(input)) = msg.union.as_ref() {
+                    let result = match self.kiosk_control.as_mut() {
+                        Some(control) => control.execute(input.clone()).await,
+                        None => return false,
+                    };
+                    let mut response = Message::new();
+                    response.set_kiosk_control_result(result);
+                    self.send(response).await;
+                    return false;
+                }
+                if !Self::is_connection_housekeeping_message(&msg) {
+                    if let Some(control) = self.kiosk_control.as_mut() { control.reject_input(); }
+                    return false;
+                }
+            }
             if self.native_management.is_some() {
                 if let Some(message::Union::NativeManagementExecute(input)) = msg.union.as_ref() {
                     let result = match self.native_management.as_mut() {
@@ -2675,6 +2700,18 @@ impl Connection {
                     }
 
                     self.terminal = true;
+                    if let Some(control) = terminal.kiosk_control.as_ref() {
+                        if !self.stream.is_secured() || terminal.native_management.is_some()
+                            || !lr.os_login.username.is_empty() || !lr.os_login.password.is_empty()
+                            || !terminal.service_id.is_empty() {
+                            self.send_login_error("kiosk_control_protocol_rejected").await;
+                            return false;
+                        }
+                        match crate::kiosk_control::Session::from_proto(control.clone()) {
+                            Ok(value) => self.kiosk_control = Some(value),
+                            Err(reason) => { self.send_login_error(reason).await; return false; }
+                        }
+                    }
                     if let Some(management) = terminal.native_management.as_ref() {
                         if !self.stream.is_secured() {
                             self.send_login_error("management_approval_denied").await;
@@ -2818,7 +2855,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.native_management.is_none() && self.is_recent_session(false) {
+            } else if self.native_management.is_none() && self.kiosk_control.is_none() && self.is_recent_session(false) {
                 if err_msg.is_empty() {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
@@ -2866,6 +2903,7 @@ impl Connection {
                     }
                 } else {
                     if let Some(management) = self.native_management.as_mut() { management.password_verified(); }
+                    if let Some(control) = self.kiosk_control.as_mut() { control.password_verified(); }
                     self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
                     if err_msg.is_empty() {
                         #[cfg(target_os = "linux")]
@@ -3917,6 +3955,27 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     async fn prepare_terminal_login_for_authorization(&mut self) -> Option<bool> {
+        if self.kiosk_control.is_some() {
+            #[cfg(windows)] {
+                if self.terminal_user_token.is_none() {
+                    if let Some(reason) = self.fill_terminal_user_token("", "") {
+                        self.send_login_error(reason).await;
+                        return Some(false);
+                    }
+                }
+                let token = self.terminal_user_token.as_ref().and_then(|t| t.to_terminal_service_token());
+                let prepared = match self.kiosk_control.as_mut() {
+                    Some(control) => control.prepare(Config::get_id(), token),
+                    None => Err("kiosk_control_not_ready"),
+                };
+                if let Err(reason) = prepared { self.send_login_error(reason).await; return Some(false); }
+                return None;
+            }
+            #[cfg(not(windows))] {
+                self.send_login_error("kiosk_control_windows_required").await;
+                return Some(false);
+            }
+        }
         if let Some(management) = self.native_management.as_mut() {
             if let Err(reason) = management.prepare(Config::get_id()) {
                 self.send_login_error(reason).await;

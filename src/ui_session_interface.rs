@@ -1748,6 +1748,8 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn handle_terminal_response(&self, response: TerminalResponse);
     fn handle_native_management_challenge(&self, _response: NativeManagementChallenge) {}
     fn handle_native_management_result(&self, _response: NativeManagementResult) {}
+    fn handle_kiosk_control_capability(&self, _response: KioskControlCapability) {}
+    fn handle_kiosk_control_result(&self, _response: KioskControlResult) {}
 }
 
 impl<T: InvokeUiSession> Deref for Session<T> {

@@ -56,3 +56,9 @@ existing local service id and temporary password through normal read-only IPC,
 requires exact id equality, and sends only `hostname` via stdin. It never sets
 credentials or terminal permissions. This is local-service evidence, separate
 from a customer device connection or unattended reconnection.
+# Sensitive kiosk approvals
+
+Do not use the legacy terminal `command` for approval/token material: its script
+enters PowerShell argv through EncodedCommand and uses a shared PTY. Use the fixed
+[private-stdin kiosk protocol](kiosk-control-stdin.md) instead. Credentials on the
+local CLI stdin do not make a legacy remote command secret.
