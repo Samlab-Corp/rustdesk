@@ -165,6 +165,10 @@ pub fn core_main() -> Option<Vec<String>> {
     if matches!(args.first().map(String::as_str), Some("--set-permanent-password-stdin" | "--verify-permanent-password-stdin")) {
         std::process::exit(crate::installer_password::run(&args));
     }
+    #[cfg(windows)]
+    if matches!(args.first().map(String::as_str),Some("--reenrollment-password-cas-stdin"|"--reenrollment-password-status-stdin")){
+        std::process::exit(crate::reenrollment_password::run(&args));
+    }
     let mut log_name = "".to_owned();
     // Keep portable-service logs under a stable directory name.
     let has_portable_service_shmem_arg = args

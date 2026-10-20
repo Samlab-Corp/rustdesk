@@ -373,6 +373,49 @@ mod local {
             _files: files,
         })
     }
+    pub(super) fn reenrollment(frame: Vec<u8>, expected_hash: &str, execute: bool) -> Result<Vec<u8>, &'static str> {
+        struct Sensitive(Vec<u8>);
+        impl Drop for Sensitive {fn drop(&mut self){self.0.fill(0)}}
+        impl std::ops::Deref for Sensitive {type Target=Vec<u8>;fn deref(&self)->&Vec<u8>{&self.0}}
+        impl std::ops::DerefMut for Sensitive {fn deref_mut(&mut self)->&mut Vec<u8>{&mut self.0}}
+        let mut frame=Sensitive(frame);
+        use sha2::{Digest, Sha256};
+        use std::io::{Seek, SeekFrom};
+        if !crate::reenrollment_policy::hash(expected_hash) || frame.is_empty() || frame.len() >= crate::reenrollment_policy::MAX_FRAME {
+            frame.fill(0); return Err("reenrollment_protocol_rejected");
+        }
+        let mut pipe = OpenOptions::new().read(true).write(true).access_mode(0x0012019b)
+            .open(r"\\.\pipe\samlab-guardian-native-remote-v1").map_err(|_| "reenrollment_capability_required")?;
+        let mut identity = verify(&pipe).map_err(|_| "reenrollment_capability_required")?;
+        let pinned = identity._files.last_mut().ok_or("reenrollment_capability_required")?;
+        let size = pinned.metadata().map_err(|_| "reenrollment_capability_required")?.len();
+        if size == 0 || size > 16777216 { frame.fill(0); return Err("reenrollment_capability_required"); }
+        let mut bytes = Vec::new();
+        pinned.read_to_end(&mut bytes).map_err(|_| "reenrollment_capability_required")?;
+        if bytes.len() as u64 != size || hex::encode(Sha256::digest(&bytes)) != expected_hash { frame.fill(0); return Err("reenrollment_capability_required"); }
+        pinned.seek(SeekFrom::Start(0)).map_err(|_| "reenrollment_capability_required")?;
+        let mode = PIPE_NOWAIT | PIPE_READMODE_MESSAGE;
+        unsafe { SetNamedPipeHandleState(handle(&pipe), Some(&mode), None, None) }.map_err(|_| "reenrollment_capability_required")?;
+        frame.push(b'\n'); let written=pipe.write_all(&frame); frame.fill(0);
+        written.map_err(|_| "reenrollment_execution_unconfirmed")?;
+        let deadline=Instant::now()+Duration::from_secs(if execute {crate::reenrollment_policy::EXECUTE_SECONDS}else{20});
+        let mut response=Vec::new(); let mut chunk=[0u8;16385];
+        while Instant::now()<deadline {
+            match pipe.read(&mut chunk) {
+                Ok(0)=>break,
+                Ok(n)=>{response.extend_from_slice(&chunk[..n]);if response.len()>16384{return Err("reenrollment_protocol_rejected")}
+                    if let Some(end)=response.iter().position(|b|*b==b'\n') {
+                        if end+1!=response.len(){return Err("reenrollment_protocol_rejected")}
+                        let _again=verify(&pipe).map_err(|_| "reenrollment_execution_unconfirmed")?;
+                        pipe.write_all(b"\n").map_err(|_| "reenrollment_execution_unconfirmed")?;return Ok(response)
+                    }
+                },
+                Err(e) if matches!(e.raw_os_error(),Some(232|536))=>std::thread::sleep(Duration::from_millis(10)),
+                Err(_)=>break,
+            }
+        }
+        Err("reenrollment_execution_unconfirmed")
+    }
     pub(super) fn request(gate: &Gate, token: &str) -> Result<VerifiedGrant, &'static str> {
         if token.is_empty() || token.len() > 8192 {
             return Err("management_invalid_request");
@@ -431,6 +474,10 @@ mod local {
 
 #[cfg(windows)]
 pub(crate) use local::{pin_kiosk, FixedKiosk};
+pub(crate) fn reenrollment_request(frame: Vec<u8>, expected_hash: &str, execute: bool) -> Result<Vec<u8>, &'static str> {
+    #[cfg(windows)] { local::reenrollment(frame, expected_hash, execute) }
+    #[cfg(not(windows))] { let _=(frame,expected_hash,execute);Err("reenrollment_system_required") }
+}
 pub fn verify(gate: &Gate, token: &str) -> Result<VerifiedGrant, &'static str> {
     #[cfg(windows)]
     {

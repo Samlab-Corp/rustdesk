@@ -727,6 +727,12 @@ pub(super) fn installer_peer_is_administrator(stream: &Connection) -> bool {
 }
 
 #[cfg(windows)]
+pub(super) fn reenrollment_peer_is_system(stream:&Connection)->bool{
+    if !authorize_windows_main_ipc_connection(stream,""){return false;}
+    let (authorized,_,_,_,system,_)=stream.server_authorization_status();authorized&&system==Some(true)
+}
+
+#[cfg(windows)]
 pub(crate) fn authorize_windows_portable_service_ipc_connection(
     stream: &Connection,
     postfix: &str,

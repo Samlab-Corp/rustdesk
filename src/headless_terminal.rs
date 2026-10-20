@@ -93,6 +93,7 @@ fn launch_command(command: &str, id: &str) -> String {
 }
 
 pub fn run() -> i32 {
+    if std::env::args().any(|a| matches!(a.as_str(), "--guardian-reenrollment-probe" | "--guardian-reenrollment")) { return crate::headless_reenrollment::run(); }
     if std::env::args().any(|arg| matches!(arg.as_str(), "--kiosk-control" | "--kiosk-control-probe")) {
         return crate::headless_kiosk_control::run();
     }
