@@ -63,6 +63,9 @@ mod ui_cm_interface;
 mod ui_interface;
 mod ui_session_interface;
 
+#[cfg(target_os = "windows")]
+pub mod headless_terminal;
+
 mod hbbs_http;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

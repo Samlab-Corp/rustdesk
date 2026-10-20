@@ -20,6 +20,10 @@ path = "src/naming.rs"
 name = "service"
 path = "src/service.rs"
 
+[[bin]]
+name = "samlab-terminal"
+path = "src/bin/samlab-terminal.rs"
+
 [features]
 inline = []
 use_samplerate = ["samplerate"]
