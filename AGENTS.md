@@ -4,6 +4,7 @@
 
 * Owned-viewer connection diagnostics expose fixed failure categories only. Never emit raw dialog/error text or retry a failed dialog; preserve server/key/authentication gates.
 * Windows initial keyboard authority uses the authenticated ordered-protocol snapshot in `docs/owned-viewer.md`; never describe it as an observed true message, override explicit denial, or authorize before the first actual frame.
+* Static-screen freshness uses only bounded authenticated `refresh_video` requests from `docs/owned-viewer.md`; never refresh timestamps/sequences of cached frames or widen the input freshness window.
 
 * Company sources are `Samlab-Corp/rustdesk` and `Samlab-Corp/hbb_common`. Keep the common library pinned to a commit available in the company repository. Use `release/next` for validated development changes and `samlab-windows.yml` for Windows test builds.
 * LetMeUp remote access starts at `https://kiosk.letmeup.co.kr`; ClassUp remote access starts at `https://ops.classup.io`. Opening a separate remote-support console does not complete device-specific integration.

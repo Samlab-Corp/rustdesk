@@ -27,12 +27,13 @@ start record to redirected stdin. Never use a shell or pass credentials in argv.
 
 ## Windows initial permission contract
 
-The fixed validated local product is built from Rust source commit
-`fb387b50eca5353ae8e0434580dce4909c81540a`. Subsequent workflow/documentation
-changes add automatic regression checks only; they do not rebuild or repin it.
+The initial-permission local product was built from Rust source commit
+`fb387b50eca5353ae8e0434580dce4909c81540a`. Its workflow/documentation-only
+follow-up added regression checks without rebuilding it. Runtime changes such
+as bounded fresh-frame requests require a new source-pinned product.
 The existing Windows x64 jobs in `flutter-build.yml` (pull requests) and
 `samlab-windows.yml` (manual company builds) run the exact
-`headless_viewer::tests::` and `viewer_policy::tests::` filters: currently 14 and
+`headless_viewer::tests::` and `viewer_policy::tests::` filters: currently 17 and
 10 tests, respectively. Generated bridge files, vcpkg dependencies and Rust caches
 are already prepared at that point. These release-profile tests explicitly use
 Rust 1.99.0 and run before the existing application build; no other platform or
@@ -70,6 +71,29 @@ Regression tests exercise the real Session PeerInfo forwarding path with initial
 unknown, default allow, initial/later explicit denial, unauthenticated or malformed
 peer data, and read-only/before-first-frame gates. This contract is not hardware
 identity verification and does not change installed hosts or general clients.
+
+## Fresh frames on a static desktop
+
+The ordinary protocol sends changed video, so a static screen can otherwise leave
+the last delivered frame older than the mandatory two-second input window. The
+viewer requests an actual recapture through `Session::refresh_video(current_display)`
+only for an authenticated encrypted peer without an error, when no actual output
+frame arrived for 750 ms. Requests are at least one second apart and capped at
+900 per process. The existing 30-second first-frame deadline, 1..900-second total
+duration, explicit close and no-reconnect contracts remain unchanged.
+
+The existing method selects `RefreshVideoDisplay` on supporting peers and the
+legacy `RefreshVideo` fallback on older peers. The host authorizes the message,
+sets the current display's `OPTION_REFRESH` and restarts that capture/encoder
+loop, producing real new frames. Only new `on_rgba` observations advance JPEG
+sequence; a refresh request never rewrites cached JPEGs, last-frame times or
+input evidence. No freshness window is widened. Existing viewers of the same host
+display may also observe this capture/encoder restart, which is why requests are
+strictly bounded and display-specific where the existing protocol supports it.
+
+Regression tests cover authentication/error gates, the exact stale threshold and
+minimum interval, total request cap, unchanged frame evidence without a new
+delivery, and actual modern/legacy refresh messages through the Session sender.
 The record is strict and has exactly these fields:
 
 ```

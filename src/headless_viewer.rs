@@ -179,6 +179,47 @@ fn viewer_session(handler: Handler, password: String) -> Session<Handler> {
     }
 }
 
+const REFRESH_STALE: Duration = Duration::from_millis(750);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_REFRESH_REQUESTS: u16 = 900;
+struct RefreshSchedule {
+    started: Instant,
+    last_request: Option<Instant>,
+    requests: u16,
+}
+impl RefreshSchedule {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            last_request: None,
+            requests: 0,
+        }
+    }
+    fn due(
+        &mut self,
+        now: Instant,
+        state: &Shared,
+        last_frame_sent: Option<Instant>,
+    ) -> Option<i32> {
+        if !state.encrypted
+            || !state.peer
+            || state.error.is_some()
+            || self.requests >= MAX_REFRESH_REQUESTS
+            || now.saturating_duration_since(last_frame_sent.unwrap_or(self.started))
+                < REFRESH_STALE
+            || self.last_request.map_or(false, |last| {
+                now.saturating_duration_since(last) < REFRESH_INTERVAL
+            })
+        {
+            return None;
+        }
+        let display = i32::try_from(state.display).ok()?;
+        self.last_request = Some(now);
+        self.requests += 1;
+        Some(display)
+    }
+}
+
 // Overwrite the owned stdin buffer before releasing it; no debugging of input.
 fn wipe(bytes: &mut [u8]) {
     for byte in bytes {
@@ -346,6 +387,8 @@ pub fn run() -> i32 {
     *cleanup.lock().unwrap() = Some((session.clone(), pressed.clone()));
     let mut viewed = false;
     let mut peer_sent = false;
+    let mut last_frame_sent = None;
+    let mut refresh = RefreshSchedule::new(started);
     let mut budget = (Instant::now(), 0usize);
     let reason;
     let mut exit = 0;
@@ -412,6 +455,7 @@ pub fn run() -> i32 {
                         break;
                     }
                     gate.sent(frame.epoch, frame.sequence, frame.w, frame.h, now);
+                    last_frame_sent = Some(now);
                     if !viewed {
                         viewed = true;
                         state.dirty = true; // Publish permission only after the actual first frame.
@@ -497,6 +541,16 @@ pub fn run() -> i32 {
                     }
                 }
             }
+        }
+        let refresh_display = refresh.due(
+            Instant::now(),
+            &handler.state.lock().unwrap(),
+            last_frame_sent,
+        );
+        if let Some(display) = refresh_display {
+            // Ask the authenticated host to recapture; never replay a cached
+            // JPEG or advance frame freshness/sequence merely for a request.
+            session.refresh_video(display);
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -840,6 +894,101 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_refresh_requires_authenticated_peer_and_never_refreshes_cached_frame_evidence() {
+        let now = Instant::now();
+        let mut state = Shared::default();
+        state.display = 2;
+        state.sequence = 41;
+        state.last = Some(now);
+        let mut refresh = RefreshSchedule::new(now);
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.encrypted = true;
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.peer = true;
+        state.error = Some("fixture_denial");
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.error = None;
+        assert_eq!(
+            refresh.due(now + Duration::from_millis(749), &state, Some(now)),
+            None
+        );
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), Some(2));
+        assert_eq!(refresh.requests, 1);
+        assert_eq!(state.sequence, 41);
+        assert_eq!(state.last, Some(now));
+        assert!(state.latest.is_none());
+        assert_eq!(
+            refresh.due(
+                now + REFRESH_STALE + Duration::from_millis(999),
+                &state,
+                Some(now)
+            ),
+            None
+        );
+        assert_eq!(
+            refresh.due(now + REFRESH_STALE + REFRESH_INTERVAL, &state, Some(now)),
+            Some(2)
+        );
+        // A genuine new delivery suppresses refresh, without rewriting the
+        // previous request or pretending the request itself delivered a frame.
+        let next = now + REFRESH_STALE + REFRESH_INTERVAL + Duration::from_millis(900);
+        assert_eq!(refresh.due(next, &state, Some(next)), None);
+        assert_eq!(state.sequence, 41);
+    }
+    #[test]
+    fn refresh_requests_are_bounded_even_when_no_first_frame_arrives() {
+        let now = Instant::now();
+        let mut state = Shared::default();
+        state.encrypted = true;
+        state.peer = true;
+        let mut refresh = RefreshSchedule::new(now);
+        for n in 0..MAX_REFRESH_REQUESTS {
+            assert_eq!(
+                refresh.due(
+                    now + REFRESH_STALE + Duration::from_secs(n.into()),
+                    &state,
+                    None
+                ),
+                Some(0)
+            );
+        }
+        assert_eq!(
+            refresh.due(now + Duration::from_secs(1000), &state, None),
+            None
+        );
+        assert_eq!(refresh.requests, MAX_REFRESH_REQUESTS);
+        assert_eq!(state.sequence, 0);
+        assert_eq!(state.last, None);
+        assert!(state.latest.is_none());
+    }
+    #[test]
+    fn refresh_uses_the_existing_display_specific_and_legacy_protocol_messages() {
+        for modern in [false, true] {
+            let (s, mut rx) = fake_session();
+            s.lc.write().unwrap().version =
+                hbb_common::get_version_number(if modern { "1.4.9" } else { "1.1.0" });
+            s.refresh_video(2);
+            match rx.try_recv().unwrap() {
+                Data::Message(message) => match message.union.unwrap() {
+                    message::Union::Misc(misc) => match misc.union.unwrap() {
+                        misc::Union::RefreshVideoDisplay(display) => {
+                            assert!(modern);
+                            assert_eq!(display, 2);
+                        }
+                        misc::Union::RefreshVideo(requested) => {
+                            assert!(!modern);
+                            assert!(requested);
+                        }
+                        _ => panic!("unexpected refresh message"),
+                    },
+                    _ => panic!("unexpected refresh message"),
+                },
+                _ => panic!("unexpected refresh message"),
+            }
+            assert!(rx.try_recv().is_err());
+        }
+    }
     fn permission_snapshot_session() -> Session<Handler> {
         let s = viewer_session(Handler::default(), String::new());
         s.lc.write().unwrap().ephemeral = true;

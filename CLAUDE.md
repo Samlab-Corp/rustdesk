@@ -2,6 +2,7 @@
 
 Owned-viewer connection diagnostics expose fixed failure categories only. Never emit raw dialog/error text or retry a failed dialog; preserve server/key/authentication gates.
 Windows initial keyboard authority uses the authenticated ordered-protocol snapshot in `docs/owned-viewer.md`; never describe it as an observed true message, override explicit denial, or authorize before the first actual frame.
+Static-screen freshness uses only bounded authenticated `refresh_video` requests from `docs/owned-viewer.md`; never refresh timestamps/sequences of cached frames or widen the input freshness window.
 
 Follow [AGENTS.md](AGENTS.md) for source, build, and verification rules.
 
