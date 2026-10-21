@@ -24,6 +24,41 @@ or evidence that a remote device is safe to restart or reenroll.
 
 The trusted PC9 worker verifies the product path and hash, then writes one JSONL
 start record to redirected stdin. Never use a shell or pass credentials in argv.
+
+## Windows initial permission contract
+
+The viewer previously waited for an explicit keyboard permission message before
+emitting `peer`. Windows hosts only send initial **false**; default permission
+therefore produced valid direct frames but no peer record, and the broker rightly
+discarded those frames. Ordinary Flutter and legacy clients initialize
+`Session.server_keyboard_enabled=true`; the dedicated viewer now uses that same
+internal protocol state, while its public Handler remains unknown and denied.
+
+Ordering is established by `server/connection.rs`: `Connection::start` awaits
+`on_open`, sends initial keyboard denial (and other denied permissions), then
+enters its sole receive/authorization loop. Successful LoginResponse/PeerInfo is
+sent later in that loop by `send_logon_response_and_keep_alive`. Permission and
+login messages both write directly to the same encrypted stream, not separate
+delivery queues. `server.rs` establishes its key before `Connection::start`;
+`hbb_common::tcp` encrypts/decrypts sequential framed messages with consecutive
+nonces. An omitted encrypted denial cannot silently become a successfully
+decoded later PeerInfo. Subsequent permission changes use the same stream.
+
+After successful PeerInfo validation, the existing Session passes its **current**
+keyboard snapshot through a default-no-op callback implemented only by the
+viewer. The viewer accepts it only for a validated encrypted peer without an
+error. A previously explicit permission (including false) takes precedence and
+cannot be replaced by the initial snapshot. Later false immediately updates both
+Session and Handler, revokes public control and releases held keys/buttons.
+Public control and input still require the user's request, validated peer,
+established permission, no error, and an actual delivered first frame; frame
+sequence/age/epoch gates remain separate and mandatory. Read-only requests stay
+read-only even when the host's protocol permission is true.
+
+Regression tests exercise the real Session PeerInfo forwarding path with initial
+unknown, default allow, initial/later explicit denial, unauthenticated or malformed
+peer data, and read-only/before-first-frame gates. This contract is not hardware
+identity verification and does not change installed hosts or general clients.
 The record is strict and has exactly these fields:
 
 ```
@@ -71,7 +106,7 @@ Subsequent JSONL records have `type: input`, `viewerVersion: 1` (may be omitted)
   but bypasses epoch/frame-age/keyboard-permission checks, including before any
   frame. A mixed event list gets no such exemption.
 
-Input requires requested and measured keyboard permission, encrypted peer login,
+Input requires requested and protocol-established keyboard permission, encrypted peer login,
 a matching current display epoch and an actually delivered frame no older than
 two seconds. At most 256 events/second, 32 queued input records and 32768 bytes per
 stdin line. Invalid/stale/foreign-session input closes without executing that
@@ -83,12 +118,14 @@ Stdout contains only JSONL public records, all with viewerVersion/sessionId/type
 * `peer`: addressId, deviceId (caller binding), encrypted:true,
   hardwareIdentityVerified:false, platform:Windows, version, keyboard:boolean.
   Version is the actual nonempty numeric major.minor.patch from PeerInfo;
-  malformed/missing versions are blocked, never synthesized. The record waits
-  for an actual keyboard permission message (including an observed false).
+  malformed/missing versions are blocked, never synthesized. Keyboard authority
+  comes from an explicit permission message or the authenticated Windows initial
+  permission snapshot described below; the latter is not an observed true message.
   Authenticated address and
   encrypted login are not hardware identity verification.
 * `permissions`: keyboard and controlAvailable (requested AND actual permission
-  AND authenticated encrypted peer). No success is inferred from connecting.
+  AND authenticated encrypted peer AND an actually delivered frame). No success
+  is inferred from connecting, a local default, or a success notice.
 * `frame`: sequence, frameEpoch, displayId, width, height, jpegBase64. Maximum
   4096x2160, 512KiB JPEG, five frames/second, one replaceable latest frame. JPEG
   quality falls from 75 to 45 to 20 to meet the cap; oversize/invalid image closes.

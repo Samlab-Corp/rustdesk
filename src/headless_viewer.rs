@@ -125,6 +125,15 @@ impl Default for Shared {
     }
 }
 impl Shared {
+    fn can_control(&self, requested: bool, frame_delivered: bool) -> bool {
+        requested
+            && frame_delivered
+            && self.encrypted
+            && self.peer
+            && self.keyboard_known
+            && self.keyboard
+            && self.error.is_none()
+    }
     fn peer_record(&self, address: &str, device: &str) -> Option<Value> {
         if !self.peer || !self.encrypted || !self.keyboard_known || self.version.is_empty() {
             return None;
@@ -156,6 +165,17 @@ impl Handler {
             s.h = h;
             s.dirty = true;
         }
+    }
+}
+
+fn viewer_session(handler: Handler, password: String) -> Session<Handler> {
+    Session::<Handler> {
+        password,
+        ui_handler: handler,
+        // Match ordinary clients' Windows protocol default. This alone grants
+        // nothing: Handler stays unknown until encrypted successful PeerInfo.
+        server_keyboard_enabled: Arc::new(std::sync::RwLock::new(true)),
+        ..Default::default()
     }
 }
 
@@ -287,11 +307,7 @@ pub fn run() -> i32 {
         return 1;
     }
     let handler = Handler::default();
-    let session = Session::<Handler> {
-        password: std::mem::take(&mut request.password),
-        ui_handler: handler.clone(),
-        ..Default::default()
-    };
+    let session = viewer_session(handler.clone(), std::mem::take(&mut request.password));
     {
         let mut lc = session.lc.write().unwrap();
         lc.ephemeral = true;
@@ -374,13 +390,15 @@ pub fn run() -> i32 {
             }
             if state.dirty {
                 state.dirty = false;
-                if !state.keyboard || gate.epoch != state.epoch {
+                if !state.can_control(request.control_requested, viewed)
+                    || gate.epoch != state.epoch
+                {
                     pressed.lock().unwrap().release(&session);
                 }
                 if !output(
                     &session_id,
                     "permissions",
-                    json!({"controlAvailable":request.control_requested&&state.keyboard&&state.peer&&state.encrypted,"keyboard":state.keyboard}),
+                    json!({"controlAvailable":state.can_control(request.control_requested,viewed),"keyboard":state.keyboard}),
                 ) {
                     reason = "output_closed";
                     break;
@@ -396,10 +414,11 @@ pub fn run() -> i32 {
                     gate.sent(frame.epoch, frame.sequence, frame.w, frame.h, now);
                     if !viewed {
                         viewed = true;
+                        state.dirty = true; // Publish permission only after the actual first frame.
                         if !output(
                             &session_id,
                             "state",
-                            json!({"phase":"viewing","reason":"first_frame_received","controlAvailable":request.control_requested&&state.keyboard}),
+                            json!({"phase":"viewing","reason":"first_frame_received","controlAvailable":state.can_control(request.control_requested,viewed)}),
                         ) {
                             reason = "output_closed";
                             break;
@@ -450,11 +469,7 @@ pub fn run() -> i32 {
                         || target != session_id
                         || (!release_only && epoch != state.epoch)
                         || !gate.accept(sequence, epoch, frame, &events, now)
-                        || (!release_only
-                            && (!request.control_requested
-                                || !state.keyboard
-                                || !state.peer
-                                || !state.encrypted))
+                        || (!release_only && !state.can_control(request.control_requested, viewed))
                     {
                         reason = "invalid_input";
                         exit = 1;
@@ -678,6 +693,16 @@ impl InvokeUiSession for Handler {
             s.dirty = true;
         }
     }
+    fn set_initial_keyboard_permission(&self, enabled: bool) {
+        let mut s = self.state.lock().unwrap();
+        // An explicit permission message (especially false) always wins. This
+        // is the authenticated protocol snapshot, not an observed true message.
+        if s.encrypted && s.peer && s.error.is_none() && !s.keyboard_known {
+            s.keyboard = enabled;
+            s.keyboard_known = true;
+            s.dirty = true;
+        }
+    }
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb) {
         let mut s = self.state.lock().unwrap();
         let now = Instant::now();
@@ -815,6 +840,89 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn permission_snapshot_session() -> Session<Handler> {
+        let s = viewer_session(Handler::default(), String::new());
+        s.lc.write().unwrap().ephemeral = true;
+        s
+    }
+    fn valid_windows_peer() -> PeerInfo {
+        let mut pi = PeerInfo::new();
+        pi.platform = "Windows".into();
+        pi.version = "1.4.9".into();
+        pi.displays.push(DisplayInfo {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        });
+        pi
+    }
+    #[test]
+    fn authenticated_windows_snapshot_resolves_initial_permission_after_peer_info() {
+        let s = permission_snapshot_session();
+        assert!(*s.server_keyboard_enabled.read().unwrap());
+        s.ui_handler.set_initial_keyboard_permission(true);
+        {
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(!state.keyboard_known && !state.keyboard);
+            assert!(!state.can_control(true, true));
+            assert!(state.peer_record("74067020", "fixture").is_none());
+        }
+        s.ui_handler.set_connection_type(true, true, "TCP");
+        Interface::handle_peer_info(&s, valid_windows_peer());
+        let state = s.ui_handler.state.lock().unwrap();
+        assert_eq!(state.error, None);
+        assert!(state.keyboard_known && state.keyboard);
+        assert_eq!(
+            state.peer_record("74067020", "fixture").unwrap()["keyboard"],
+            true
+        );
+        assert!(!state.can_control(true, false)); // no actual first frame
+        assert!(!state.can_control(false, true)); // read-only request
+        assert!(state.can_control(true, true));
+    }
+    #[test]
+    fn initial_and_later_explicit_denials_override_the_protocol_default() {
+        for initially_denied in [false, true] {
+            let s = permission_snapshot_session();
+            if initially_denied {
+                *s.server_keyboard_enabled.write().unwrap() = false;
+                s.ui_handler.set_permission("keyboard", false);
+            }
+            s.ui_handler.set_connection_type(true, true, "TCP");
+            Interface::handle_peer_info(&s, valid_windows_peer());
+            assert_eq!(
+                s.ui_handler.state.lock().unwrap().keyboard,
+                !initially_denied
+            );
+            // Same sequence as the actual PermissionInfo handler.
+            *s.server_keyboard_enabled.write().unwrap() = false;
+            s.ui_handler.set_permission("keyboard", false);
+            s.ui_handler.set_initial_keyboard_permission(true);
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(state.keyboard_known);
+            assert!(!state.keyboard && !state.can_control(true, true));
+            assert_eq!(
+                state.peer_record("74067020", "fixture").unwrap()["keyboard"],
+                false
+            );
+        }
+    }
+    #[test]
+    fn initial_snapshot_cannot_authorize_unencrypted_or_invalid_peer_info() {
+        for encrypted in [false, true] {
+            let s = permission_snapshot_session();
+            s.ui_handler.set_connection_type(encrypted, true, "TCP");
+            let mut pi = valid_windows_peer();
+            if encrypted {
+                pi.version = "PRIVATE-invalid".into();
+            }
+            Interface::handle_peer_info(&s, pi);
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(state.error.is_some());
+            assert!(!state.keyboard_known && !state.can_control(true, true));
+            assert!(state.peer_record("74067020", "fixture").is_none());
+        }
+    }
     #[test]
     fn ordinary_peer_info_success_notice_does_not_abort_before_first_image() {
         let (s, _rx) = fake_session();
