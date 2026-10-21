@@ -5,12 +5,19 @@ ordinary `DEFAULT_CONN` RustDesk desktop protocol and the company's existing
 rendezvous/relay. It does not require a new receiver protocol on installed hosts.
 It is not a terminal, management command runner, web server or external console.
 
-Connection dialogs remain terminal denials with no retry. Their public reasons
+Failure and prompt dialogs remain terminal denials with no retry. The exact
+ordinary Session notice `success` / `Successful` / `Connected, waiting for image...`
+with an empty link is informational: ignore it only after encrypted peer checks
+passed and no error exists, so it cannot abort a valid session before its first
+image. Arbitrary success dialogs still fail closed. The real Session forwarding
+path is regression-tested, not just the viewer's peer callback in isolation.
+Public failure reasons
 are fixed categories: password_required/password_rejected, two_factor_required,
 session_authentication_required/login_rejected, remote_offline/remote_id_unknown,
 server_key_mismatch/server_key_rejected, connection_peer_reset/connection_timeout,
 rendezvous_connection_failed/relay_connection_failed/direct_connection_failed,
-connection_security_failed, or the unchanged connection_unavailable fallback.
+connection_security_failed, remote_display_unavailable,
+encrypted_connection_required, or the unchanged connection_unavailable fallback.
 Raw dialog type/title/text/link, server addresses, peer IDs and credentials are
 never emitted. A category reports the protocol failure, not hardware identity
 or evidence that a remote device is safe to restart or reenroll.

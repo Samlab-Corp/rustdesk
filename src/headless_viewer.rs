@@ -27,6 +27,7 @@ fn connection_failure_reason(msgtype: &str, title: &str, text: &str) -> &'static
         "input-password" => return "password_required",
         "re-input-password" => return "password_rejected",
         "input-2fa" => return "two_factor_required",
+        "insecure-connection-nocancel-hasclose" => return "encrypted_connection_required",
         "session-login"
         | "session-re-login"
         | "session-login-password"
@@ -37,6 +38,9 @@ fn connection_failure_reason(msgtype: &str, title: &str, text: &str) -> &'static
     }
     if title == "Login Error" {
         return "login_rejected";
+    }
+    if title == "Error" && text == "No displays" {
+        return "remote_display_unavailable";
     }
     if title != "Connection Error" {
         return "connection_unavailable";
@@ -721,6 +725,20 @@ impl InvokeUiSession for Handler {
         }
     }
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
+        // The ordinary Session handler emits this informational dialog after
+        // set_peer_info, before the first image. It is not a failure or a prompt.
+        // Accept only that exact notice after our encrypted peer checks passed.
+        if msgtype == "success"
+            && title == "Successful"
+            && text == "Connected, waiting for image..."
+            && link.is_empty()
+            && !retry
+        {
+            let state = self.state.lock().unwrap();
+            if state.encrypted && state.peer && state.error.is_none() {
+                return;
+            }
+        }
         self.fail(connection_failure_reason(msgtype, title, text));
     }
     fn new_message(&self, msg: String) {
@@ -797,6 +815,114 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_peer_info_success_notice_does_not_abort_before_first_image() {
+        let (s, _rx) = fake_session();
+        s.lc.write().unwrap().ephemeral = true;
+        s.ui_handler.set_connection_type(true, true, "TCP");
+        s.ui_handler.set_permission("keyboard", false);
+        let mut pi = PeerInfo::new();
+        pi.platform = "Windows".into();
+        pi.version = "1.4.9".into();
+        pi.displays.push(DisplayInfo {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        });
+        // Exercise the real forwarding path, including its success msgbox,
+        // instead of calling Handler::set_peer_info directly.
+        Interface::handle_peer_info(&s, pi);
+        let state = s.ui_handler.state.lock().unwrap();
+        assert!(state.encrypted && state.peer);
+        assert_eq!(state.error, None);
+        assert!(state.peer_record("74067020", "fixture").is_some());
+        assert!(state.latest.is_none()); // A notice does not manufacture a frame.
+    }
+
+    #[test]
+    fn success_notice_cannot_bypass_peer_checks_or_hide_other_dialogs() {
+        let h = Handler::default();
+        h.msgbox(
+            "success",
+            "Successful",
+            "Connected, waiting for image...",
+            "",
+            false,
+        );
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("connection_unavailable")
+        );
+        for (kind, title, text, link) in [
+            ("success", "Successful", "PRIVATE", ""),
+            (
+                "success",
+                "Successful",
+                "Connected, waiting for image...",
+                "PRIVATE",
+            ),
+            (
+                "custom-nocancel-success",
+                "Successful",
+                "Elevate successfully",
+                "",
+            ),
+        ] {
+            let h = Handler::default();
+            {
+                let mut state = h.state.lock().unwrap();
+                state.encrypted = true;
+                state.peer = true;
+            }
+            h.msgbox(kind, title, text, link, false);
+            assert_eq!(
+                h.state.lock().unwrap().error,
+                Some("connection_unavailable")
+            );
+        }
+        let h = Handler::default();
+        h.msgbox("error", "Error", "No displays", "", false);
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("remote_display_unavailable")
+        );
+        for (kind, expected) in [
+            ("error", "connection_unavailable"),
+            ("input-password", "password_required"),
+        ] {
+            let h = Handler::default();
+            {
+                let mut state = h.state.lock().unwrap();
+                state.encrypted = true;
+                state.peer = true;
+            }
+            h.msgbox(
+                kind,
+                "Successful",
+                "Connected, waiting for image...",
+                "",
+                false,
+            );
+            assert_eq!(h.state.lock().unwrap().error, Some(expected));
+        }
+        let h = Handler::default();
+        {
+            let mut state = h.state.lock().unwrap();
+            state.encrypted = true;
+            state.peer = true;
+        }
+        h.msgbox(
+            "success",
+            "Successful",
+            "Connected, waiting for image...",
+            "",
+            true,
+        );
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("connection_unavailable")
+        );
+    }
     #[test]
     fn connection_failures_are_fixed_codes_and_never_retry_or_echo_private_text() {
         let cases = [
