@@ -27,6 +27,17 @@ start record to redirected stdin. Never use a shell or pass credentials in argv.
 
 ## Windows initial permission contract
 
+The fixed validated local product is built from Rust source commit
+`fb387b50eca5353ae8e0434580dce4909c81540a`. Subsequent workflow/documentation
+changes add automatic regression checks only; they do not rebuild or repin it.
+The existing Windows x64 jobs in `flutter-build.yml` (pull requests) and
+`samlab-windows.yml` (manual company builds) run the exact
+`headless_viewer::tests::` and `viewer_policy::tests::` filters: currently 14 and
+10 tests, respectively. Generated bridge files, vcpkg dependencies and Rust caches
+are already prepared at that point. These release-profile tests explicitly use
+Rust 1.99.0 and run before the existing application build; no other platform or
+application build toolchain is changed. Either test failure fails the job.
+
 The viewer previously waited for an explicit keyboard permission message before
 emitting `peer`. Windows hosts only send initial **false**; default permission
 therefore produced valid direct frames but no peer record, and the broker rightly
