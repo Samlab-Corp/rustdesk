@@ -33,6 +33,33 @@ pub fn replace_latest<T>(queue: &crossbeam_queue::ArrayQueue<T>, value: T) -> bo
     wake
 }
 
+/// Match the ordinary decoder's key-frame boundary without bypassing the
+/// owned viewer's one-slot queue. Only a real encoded key frame can recover
+/// that queue after a refresh; delta frames cannot reset discard state.
+pub fn contains_key_frame(vf: &hbb_common::message_proto::VideoFrame) -> bool {
+    use hbb_common::message_proto::video_frame::Union::*;
+    match &vf.union {
+        Some(Vp8s(f) | Vp9s(f) | Av1s(f) | H264s(f) | H265s(f)) =>
+            f.frames.iter().any(|frame| frame.key),
+        _ => false,
+    }
+}
+
+pub fn pop_queued_frame(
+    queue: &crossbeam_queue::ArrayQueue<hbb_common::message_proto::VideoFrame>,
+    discard: &mut bool,
+    owned: bool,
+) -> Option<hbb_common::message_proto::VideoFrame> {
+    let frame = queue.pop()?;
+    if *discard {
+        if !owned || !contains_key_frame(&frame) {
+            return None;
+        }
+        *discard = false;
+    }
+    Some(frame)
+}
+
 /// Viewer input from the remote peer is a deliberately small protocol subset.
 pub fn allowed_inbound(message: &hbb_common::message_proto::Message) -> bool {
     use hbb_common::message_proto::{message, misc, permission_info::Permission};
@@ -334,6 +361,61 @@ pub fn jpeg(image: &scrap::ImageRgb) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn encoded_frame(key: bool, pts: i64) -> hbb_common::message_proto::VideoFrame {
+        use hbb_common::message_proto::*;
+        let mut encoded = EncodedVideoFrames::new();
+        encoded.frames.push(EncodedVideoFrame { key, pts, ..Default::default() });
+        let mut frame = VideoFrame::new();
+        frame.set_vp9s(encoded);
+        frame
+    }
+    #[test]
+    fn owned_decoder_queue_recovers_only_on_an_actual_keyframe_after_refresh() {
+        let queue = crossbeam_queue::ArrayQueue::new(120);
+        let mut discard = false;
+        assert!(replace_latest(&queue, encoded_frame(true, 1)));
+        assert!(pop_queued_frame(&queue, &mut discard, true).is_some());
+        discard = true; // Same transition as the real refresh message handler.
+        assert!(pop_queued_frame(&queue, &mut discard, true).is_none());
+        assert!(discard);
+        assert!(replace_latest(&queue, encoded_frame(false, 2)));
+        assert!(pop_queued_frame(&queue, &mut discard, true).is_none());
+        assert!(discard);
+        assert!(replace_latest(&queue, encoded_frame(true, 3)));
+        let recovered = pop_queued_frame(&queue, &mut discard, true).unwrap();
+        assert!(contains_key_frame(&recovered));
+        assert!(!discard);
+        assert!(replace_latest(&queue, encoded_frame(false, 4)));
+        assert!(pop_queued_frame(&queue, &mut discard, true).is_some());
+    }
+    #[test]
+    fn decoder_queue_keeps_non_owned_discard_and_rejects_non_encoded_keyframes() {
+        let queue = crossbeam_queue::ArrayQueue::new(120);
+        let mut discard = true;
+        replace_latest(&queue, encoded_frame(true, 1));
+        assert!(pop_queued_frame(&queue, &mut discard, false).is_none());
+        assert!(discard);
+        replace_latest(&queue, hbb_common::message_proto::VideoFrame::new());
+        assert!(pop_queued_frame(&queue, &mut discard, true).is_none());
+        assert!(discard);
+    }
+    #[test]
+    fn refresh_keyframes_remain_in_the_single_replaceable_queue_under_burst() {
+        let queue = crossbeam_queue::ArrayQueue::new(120);
+        let mut discard = true;
+        for n in 0..1000 {
+            assert_eq!(replace_latest(&queue, encoded_frame(true, n)), n == 0);
+            assert_eq!(queue.len(), 1);
+        }
+        let frame = pop_queued_frame(&queue, &mut discard, true).unwrap();
+        match frame.union.unwrap() {
+            hbb_common::message_proto::video_frame::Union::Vp9s(frames) =>
+                assert_eq!(frames.frames[0].pts, 999),
+            _ => panic!("expected encoded key frame"),
+        }
+        assert!(!discard);
+        assert!(queue.is_empty());
+    }
     #[test]
     fn only_actual_numeric_peer_versions_can_be_public() {
         assert!(valid_peer_version("1.4.9"));

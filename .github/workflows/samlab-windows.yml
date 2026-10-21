@@ -245,6 +245,18 @@ jobs:
         shell: bash
         run: echo "SODIUM_LIB_DIR=$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib" >> "$GITHUB_ENV"
 
+      - name: Test owned viewer Session and frame policy
+        if: ${{ matrix.job.arch == 'x86_64' }}
+        shell: pwsh
+        run: |
+          # Test only: keep the existing application build toolchain unchanged.
+          rustup toolchain install 1.99.0 --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.0 test --locked --release --features flutter,hwcodec,vram --lib headless_viewer::tests:: --target x86_64-pc-windows-msvc -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.0 test --locked --release --features flutter,hwcodec,vram --lib viewer_policy::tests:: --target x86_64-pc-windows-msvc -- --test-threads=1
+          exit $LASTEXITCODE
+
       - name: Build rustdesk
         run: |
           # Windows: build RustDesk

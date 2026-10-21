@@ -18,6 +18,58 @@ use std::{
 };
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+// Only fixed categories cross stdout. Remote/network text can contain private
+// values, so never return it or use it as a public fallback. All dialogs still
+// terminate the attempt; this does not add prompts, retries or weaker auth.
+fn connection_failure_reason(msgtype: &str, title: &str, text: &str) -> &'static str {
+    match msgtype {
+        "input-password" => return "password_required",
+        "re-input-password" => return "password_rejected",
+        "input-2fa" => return "two_factor_required",
+        "insecure-connection-nocancel-hasclose" => return "encrypted_connection_required",
+        "session-login"
+        | "session-re-login"
+        | "session-login-password"
+        | "session-login-re-password" => {
+            return "session_authentication_required";
+        }
+        _ => {}
+    }
+    if title == "Login Error" {
+        return "login_rejected";
+    }
+    if title == "Error" && text == "No displays" {
+        return "remote_display_unavailable";
+    }
+    if title != "Connection Error" {
+        return "connection_unavailable";
+    }
+    match text {
+        "Remote desktop is offline" => "remote_offline",
+        "ID does not exist" => "remote_id_unknown",
+        "Key mismatch" => "server_key_mismatch",
+        "Key overuse" => "server_key_rejected",
+        "Reset by the peer" => "connection_peer_reset",
+        "Timeout" => "connection_timeout",
+        _ if text.starts_with("Failed to connect via rendezvous server")
+            || text.starts_with("Failed to connect to rendezvous server") =>
+        {
+            "rendezvous_connection_failed"
+        }
+        _ if text.starts_with("Failed to connect via relay server")
+            || text.starts_with("Failed to connect to relay server") =>
+        {
+            "relay_connection_failed"
+        }
+        _ if text.starts_with("Failed to make direct connection to remote desktop") => {
+            "direct_connection_failed"
+        }
+        _ if text.starts_with("Failed to secure tcp") => "connection_security_failed",
+        _ => "connection_unavailable",
+    }
+}
+
 lazy_static::lazy_static! {
     static ref OUTPUT_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
 }
@@ -73,6 +125,15 @@ impl Default for Shared {
     }
 }
 impl Shared {
+    fn can_control(&self, requested: bool, frame_delivered: bool) -> bool {
+        requested
+            && frame_delivered
+            && self.encrypted
+            && self.peer
+            && self.keyboard_known
+            && self.keyboard
+            && self.error.is_none()
+    }
     fn peer_record(&self, address: &str, device: &str) -> Option<Value> {
         if !self.peer || !self.encrypted || !self.keyboard_known || self.version.is_empty() {
             return None;
@@ -104,6 +165,58 @@ impl Handler {
             s.h = h;
             s.dirty = true;
         }
+    }
+}
+
+fn viewer_session(handler: Handler, password: String) -> Session<Handler> {
+    Session::<Handler> {
+        password,
+        ui_handler: handler,
+        // Match ordinary clients' Windows protocol default. This alone grants
+        // nothing: Handler stays unknown until encrypted successful PeerInfo.
+        server_keyboard_enabled: Arc::new(std::sync::RwLock::new(true)),
+        ..Default::default()
+    }
+}
+
+const REFRESH_STALE: Duration = Duration::from_millis(750);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_REFRESH_REQUESTS: u16 = 900;
+struct RefreshSchedule {
+    started: Instant,
+    last_request: Option<Instant>,
+    requests: u16,
+}
+impl RefreshSchedule {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            last_request: None,
+            requests: 0,
+        }
+    }
+    fn due(
+        &mut self,
+        now: Instant,
+        state: &Shared,
+        last_frame_sent: Option<Instant>,
+    ) -> Option<i32> {
+        if !state.encrypted
+            || !state.peer
+            || state.error.is_some()
+            || self.requests >= MAX_REFRESH_REQUESTS
+            || now.saturating_duration_since(last_frame_sent.unwrap_or(self.started))
+                < REFRESH_STALE
+            || self.last_request.map_or(false, |last| {
+                now.saturating_duration_since(last) < REFRESH_INTERVAL
+            })
+        {
+            return None;
+        }
+        let display = i32::try_from(state.display).ok()?;
+        self.last_request = Some(now);
+        self.requests += 1;
+        Some(display)
     }
 }
 
@@ -235,11 +348,7 @@ pub fn run() -> i32 {
         return 1;
     }
     let handler = Handler::default();
-    let session = Session::<Handler> {
-        password: std::mem::take(&mut request.password),
-        ui_handler: handler.clone(),
-        ..Default::default()
-    };
+    let session = viewer_session(handler.clone(), std::mem::take(&mut request.password));
     {
         let mut lc = session.lc.write().unwrap();
         lc.ephemeral = true;
@@ -278,6 +387,8 @@ pub fn run() -> i32 {
     *cleanup.lock().unwrap() = Some((session.clone(), pressed.clone()));
     let mut viewed = false;
     let mut peer_sent = false;
+    let mut last_frame_sent = None;
+    let mut refresh = RefreshSchedule::new(started);
     let mut budget = (Instant::now(), 0usize);
     let reason;
     let mut exit = 0;
@@ -322,13 +433,15 @@ pub fn run() -> i32 {
             }
             if state.dirty {
                 state.dirty = false;
-                if !state.keyboard || gate.epoch != state.epoch {
+                if !state.can_control(request.control_requested, viewed)
+                    || gate.epoch != state.epoch
+                {
                     pressed.lock().unwrap().release(&session);
                 }
                 if !output(
                     &session_id,
                     "permissions",
-                    json!({"controlAvailable":request.control_requested&&state.keyboard&&state.peer&&state.encrypted,"keyboard":state.keyboard}),
+                    json!({"controlAvailable":state.can_control(request.control_requested,viewed),"keyboard":state.keyboard}),
                 ) {
                     reason = "output_closed";
                     break;
@@ -342,12 +455,14 @@ pub fn run() -> i32 {
                         break;
                     }
                     gate.sent(frame.epoch, frame.sequence, frame.w, frame.h, now);
+                    last_frame_sent = Some(now);
                     if !viewed {
                         viewed = true;
+                        state.dirty = true; // Publish permission only after the actual first frame.
                         if !output(
                             &session_id,
                             "state",
-                            json!({"phase":"viewing","reason":"first_frame_received","controlAvailable":request.control_requested&&state.keyboard}),
+                            json!({"phase":"viewing","reason":"first_frame_received","controlAvailable":state.can_control(request.control_requested,viewed)}),
                         ) {
                             reason = "output_closed";
                             break;
@@ -398,11 +513,7 @@ pub fn run() -> i32 {
                         || target != session_id
                         || (!release_only && epoch != state.epoch)
                         || !gate.accept(sequence, epoch, frame, &events, now)
-                        || (!release_only
-                            && (!request.control_requested
-                                || !state.keyboard
-                                || !state.peer
-                                || !state.encrypted))
+                        || (!release_only && !state.can_control(request.control_requested, viewed))
                     {
                         reason = "invalid_input";
                         exit = 1;
@@ -430,6 +541,16 @@ pub fn run() -> i32 {
                     }
                 }
             }
+        }
+        let refresh_display = refresh.due(
+            Instant::now(),
+            &handler.state.lock().unwrap(),
+            last_frame_sent,
+        );
+        if let Some(display) = refresh_display {
+            // Ask the authenticated host to recapture; never replay a cached
+            // JPEG or advance frame freshness/sequence merely for a request.
+            session.refresh_video(display);
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -626,6 +747,16 @@ impl InvokeUiSession for Handler {
             s.dirty = true;
         }
     }
+    fn set_initial_keyboard_permission(&self, enabled: bool) {
+        let mut s = self.state.lock().unwrap();
+        // An explicit permission message (especially false) always wins. This
+        // is the authenticated protocol snapshot, not an observed true message.
+        if s.encrypted && s.peer && s.error.is_none() && !s.keyboard_known {
+            s.keyboard = enabled;
+            s.keyboard_known = true;
+            s.dirty = true;
+        }
+    }
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb) {
         let mut s = self.state.lock().unwrap();
         let now = Instant::now();
@@ -673,7 +804,21 @@ impl InvokeUiSession for Handler {
         }
     }
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
-        self.fail("connection_unavailable");
+        // The ordinary Session handler emits this informational dialog after
+        // set_peer_info, before the first image. It is not a failure or a prompt.
+        // Accept only that exact notice after our encrypted peer checks passed.
+        if msgtype == "success"
+            && title == "Successful"
+            && text == "Connected, waiting for image..."
+            && link.is_empty()
+            && !retry
+        {
+            let state = self.state.lock().unwrap();
+            if state.encrypted && state.peer && state.error.is_none() {
+                return;
+            }
+        }
+        self.fail(connection_failure_reason(msgtype, title, text));
     }
     fn new_message(&self, msg: String) {
         self.fail("connection_closed");
@@ -749,6 +894,405 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_refresh_requires_authenticated_peer_and_never_refreshes_cached_frame_evidence() {
+        let now = Instant::now();
+        let mut state = Shared::default();
+        state.display = 2;
+        state.sequence = 41;
+        state.last = Some(now);
+        let mut refresh = RefreshSchedule::new(now);
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.encrypted = true;
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.peer = true;
+        state.error = Some("fixture_denial");
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), None);
+        state.error = None;
+        assert_eq!(
+            refresh.due(now + Duration::from_millis(749), &state, Some(now)),
+            None
+        );
+        assert_eq!(refresh.due(now + REFRESH_STALE, &state, Some(now)), Some(2));
+        assert_eq!(refresh.requests, 1);
+        assert_eq!(state.sequence, 41);
+        assert_eq!(state.last, Some(now));
+        assert!(state.latest.is_none());
+        assert_eq!(
+            refresh.due(
+                now + REFRESH_STALE + Duration::from_millis(999),
+                &state,
+                Some(now)
+            ),
+            None
+        );
+        assert_eq!(
+            refresh.due(now + REFRESH_STALE + REFRESH_INTERVAL, &state, Some(now)),
+            Some(2)
+        );
+        // A genuine new delivery suppresses refresh, without rewriting the
+        // previous request or pretending the request itself delivered a frame.
+        let next = now + REFRESH_STALE + REFRESH_INTERVAL + Duration::from_millis(900);
+        assert_eq!(refresh.due(next, &state, Some(next)), None);
+        assert_eq!(state.sequence, 41);
+    }
+    #[test]
+    fn refresh_requests_are_bounded_even_when_no_first_frame_arrives() {
+        let now = Instant::now();
+        let mut state = Shared::default();
+        state.encrypted = true;
+        state.peer = true;
+        let mut refresh = RefreshSchedule::new(now);
+        for n in 0..MAX_REFRESH_REQUESTS {
+            assert_eq!(
+                refresh.due(
+                    now + REFRESH_STALE + Duration::from_secs(n.into()),
+                    &state,
+                    None
+                ),
+                Some(0)
+            );
+        }
+        assert_eq!(
+            refresh.due(now + Duration::from_secs(1000), &state, None),
+            None
+        );
+        assert_eq!(refresh.requests, MAX_REFRESH_REQUESTS);
+        assert_eq!(state.sequence, 0);
+        assert_eq!(state.last, None);
+        assert!(state.latest.is_none());
+    }
+    #[test]
+    fn refresh_uses_the_existing_display_specific_and_legacy_protocol_messages() {
+        for modern in [false, true] {
+            let (s, mut rx) = fake_session();
+            s.lc.write().unwrap().version =
+                hbb_common::get_version_number(if modern { "1.4.9" } else { "1.1.0" });
+            s.refresh_video(2);
+            match rx.try_recv().unwrap() {
+                Data::Message(message) => match message.union.unwrap() {
+                    message::Union::Misc(misc) => match misc.union.unwrap() {
+                        misc::Union::RefreshVideoDisplay(display) => {
+                            assert!(modern);
+                            assert_eq!(display, 2);
+                        }
+                        misc::Union::RefreshVideo(requested) => {
+                            assert!(!modern);
+                            assert!(requested);
+                        }
+                        _ => panic!("unexpected refresh message"),
+                    },
+                    _ => panic!("unexpected refresh message"),
+                },
+                _ => panic!("unexpected refresh message"),
+            }
+            assert!(rx.try_recv().is_err());
+        }
+    }
+    fn permission_snapshot_session() -> Session<Handler> {
+        let s = viewer_session(Handler::default(), String::new());
+        s.lc.write().unwrap().ephemeral = true;
+        s
+    }
+    fn valid_windows_peer() -> PeerInfo {
+        let mut pi = PeerInfo::new();
+        pi.platform = "Windows".into();
+        pi.version = "1.4.9".into();
+        pi.displays.push(DisplayInfo {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        });
+        pi
+    }
+    #[test]
+    fn authenticated_windows_snapshot_resolves_initial_permission_after_peer_info() {
+        let s = permission_snapshot_session();
+        assert!(*s.server_keyboard_enabled.read().unwrap());
+        s.ui_handler.set_initial_keyboard_permission(true);
+        {
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(!state.keyboard_known && !state.keyboard);
+            assert!(!state.can_control(true, true));
+            assert!(state.peer_record("74067020", "fixture").is_none());
+        }
+        s.ui_handler.set_connection_type(true, true, "TCP");
+        Interface::handle_peer_info(&s, valid_windows_peer());
+        let state = s.ui_handler.state.lock().unwrap();
+        assert_eq!(state.error, None);
+        assert!(state.keyboard_known && state.keyboard);
+        assert_eq!(
+            state.peer_record("74067020", "fixture").unwrap()["keyboard"],
+            true
+        );
+        assert!(!state.can_control(true, false)); // no actual first frame
+        assert!(!state.can_control(false, true)); // read-only request
+        assert!(state.can_control(true, true));
+    }
+    #[test]
+    fn initial_and_later_explicit_denials_override_the_protocol_default() {
+        for initially_denied in [false, true] {
+            let s = permission_snapshot_session();
+            if initially_denied {
+                *s.server_keyboard_enabled.write().unwrap() = false;
+                s.ui_handler.set_permission("keyboard", false);
+            }
+            s.ui_handler.set_connection_type(true, true, "TCP");
+            Interface::handle_peer_info(&s, valid_windows_peer());
+            assert_eq!(
+                s.ui_handler.state.lock().unwrap().keyboard,
+                !initially_denied
+            );
+            // Same sequence as the actual PermissionInfo handler.
+            *s.server_keyboard_enabled.write().unwrap() = false;
+            s.ui_handler.set_permission("keyboard", false);
+            s.ui_handler.set_initial_keyboard_permission(true);
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(state.keyboard_known);
+            assert!(!state.keyboard && !state.can_control(true, true));
+            assert_eq!(
+                state.peer_record("74067020", "fixture").unwrap()["keyboard"],
+                false
+            );
+        }
+    }
+    #[test]
+    fn initial_snapshot_cannot_authorize_unencrypted_or_invalid_peer_info() {
+        for encrypted in [false, true] {
+            let s = permission_snapshot_session();
+            s.ui_handler.set_connection_type(encrypted, true, "TCP");
+            let mut pi = valid_windows_peer();
+            if encrypted {
+                pi.version = "PRIVATE-invalid".into();
+            }
+            Interface::handle_peer_info(&s, pi);
+            let state = s.ui_handler.state.lock().unwrap();
+            assert!(state.error.is_some());
+            assert!(!state.keyboard_known && !state.can_control(true, true));
+            assert!(state.peer_record("74067020", "fixture").is_none());
+        }
+    }
+    #[test]
+    fn ordinary_peer_info_success_notice_does_not_abort_before_first_image() {
+        let (s, _rx) = fake_session();
+        s.lc.write().unwrap().ephemeral = true;
+        s.ui_handler.set_connection_type(true, true, "TCP");
+        s.ui_handler.set_permission("keyboard", false);
+        let mut pi = PeerInfo::new();
+        pi.platform = "Windows".into();
+        pi.version = "1.4.9".into();
+        pi.displays.push(DisplayInfo {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        });
+        // Exercise the real forwarding path, including its success msgbox,
+        // instead of calling Handler::set_peer_info directly.
+        Interface::handle_peer_info(&s, pi);
+        let state = s.ui_handler.state.lock().unwrap();
+        assert!(state.encrypted && state.peer);
+        assert_eq!(state.error, None);
+        assert!(state.peer_record("74067020", "fixture").is_some());
+        assert!(state.latest.is_none()); // A notice does not manufacture a frame.
+    }
+
+    #[test]
+    fn success_notice_cannot_bypass_peer_checks_or_hide_other_dialogs() {
+        let h = Handler::default();
+        h.msgbox(
+            "success",
+            "Successful",
+            "Connected, waiting for image...",
+            "",
+            false,
+        );
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("connection_unavailable")
+        );
+        for (kind, title, text, link) in [
+            ("success", "Successful", "PRIVATE", ""),
+            (
+                "success",
+                "Successful",
+                "Connected, waiting for image...",
+                "PRIVATE",
+            ),
+            (
+                "custom-nocancel-success",
+                "Successful",
+                "Elevate successfully",
+                "",
+            ),
+        ] {
+            let h = Handler::default();
+            {
+                let mut state = h.state.lock().unwrap();
+                state.encrypted = true;
+                state.peer = true;
+            }
+            h.msgbox(kind, title, text, link, false);
+            assert_eq!(
+                h.state.lock().unwrap().error,
+                Some("connection_unavailable")
+            );
+        }
+        let h = Handler::default();
+        h.msgbox("error", "Error", "No displays", "", false);
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("remote_display_unavailable")
+        );
+        for (kind, expected) in [
+            ("error", "connection_unavailable"),
+            ("input-password", "password_required"),
+        ] {
+            let h = Handler::default();
+            {
+                let mut state = h.state.lock().unwrap();
+                state.encrypted = true;
+                state.peer = true;
+            }
+            h.msgbox(
+                kind,
+                "Successful",
+                "Connected, waiting for image...",
+                "",
+                false,
+            );
+            assert_eq!(h.state.lock().unwrap().error, Some(expected));
+        }
+        let h = Handler::default();
+        {
+            let mut state = h.state.lock().unwrap();
+            state.encrypted = true;
+            state.peer = true;
+        }
+        h.msgbox(
+            "success",
+            "Successful",
+            "Connected, waiting for image...",
+            "",
+            true,
+        );
+        assert_eq!(
+            h.state.lock().unwrap().error,
+            Some("connection_unavailable")
+        );
+    }
+    #[test]
+    fn connection_failures_are_fixed_codes_and_never_retry_or_echo_private_text() {
+        let cases = [
+            (
+                "input-password",
+                "Password Required",
+                "",
+                "password_required",
+            ),
+            (
+                "re-input-password",
+                "Wrong Password",
+                "",
+                "password_rejected",
+            ),
+            ("input-2fa", "2FA Required", "", "two_factor_required"),
+            (
+                "session-login-password",
+                "",
+                "",
+                "session_authentication_required",
+            ),
+            (
+                "error",
+                "Login Error",
+                "PRIVATE-unknown-denial",
+                "login_rejected",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Remote desktop is offline",
+                "remote_offline",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "ID does not exist",
+                "remote_id_unknown",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Key mismatch",
+                "server_key_mismatch",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Key overuse",
+                "server_key_rejected",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Reset by the peer",
+                "connection_peer_reset",
+            ),
+            ("error", "Connection Error", "Timeout", "connection_timeout"),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect via rendezvous server: PRIVATE",
+                "rendezvous_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect to rendezvous server: PRIVATE",
+                "rendezvous_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect via relay server: PRIVATE",
+                "relay_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect to relay server: PRIVATE",
+                "relay_connection_failed",
+            ),
+            (
+                "relay-hint",
+                "Connection Error",
+                "Failed to make direct connection to remote desktop",
+                "direct_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to secure tcp: PRIVATE",
+                "connection_security_failed",
+            ),
+            (
+                "PRIVATE",
+                "PRIVATE",
+                "PRIVATE password token key address id",
+                "connection_unavailable",
+            ),
+        ];
+        for (kind, title, text, expected) in cases {
+            let h = Handler::default();
+            // The retry hint remains ignored: every dialog is a terminal denial.
+            h.msgbox(kind, title, text, "PRIVATE-LINK", true);
+            assert_eq!(h.state.lock().unwrap().error, Some(expected));
+        }
+        assert_eq!(
+            connection_failure_reason("error", "PRIVATE", "Key mismatch PRIVATE"),
+            "connection_unavailable"
+        );
+    }
     #[test]
     fn public_peer_waits_for_actual_version_and_observed_false_permission() {
         let h = Handler::default();

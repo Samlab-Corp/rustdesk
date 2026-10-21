@@ -1,5 +1,9 @@
 # Project instructions
 
+Owned-viewer connection diagnostics expose fixed failure categories only. Never emit raw dialog/error text or retry a failed dialog; preserve server/key/authentication gates.
+Windows initial keyboard authority uses the authenticated ordered-protocol snapshot in `docs/owned-viewer.md`; never describe it as an observed true message, override explicit denial, or authorize before the first actual frame.
+Static-screen freshness uses only bounded authenticated `refresh_video` requests from `docs/owned-viewer.md`; never refresh timestamps/sequences of cached frames or widen the input freshness window.
+
 Follow [AGENTS.md](AGENTS.md) for source, build, and verification rules.
 
 Browser desktop viewing follows [docs/owned-viewer.md](docs/owned-viewer.md): separate fixed PC9 receiver, stdin-only credentials, bounded CPU JPEG, exact session/frame/permission gates and held-key release. Preserve installed ordinary-protocol hosts and never equate source/build proof with real viewing or hardware identity.
@@ -15,3 +19,5 @@ LetMeUp remote access starts at `https://kiosk.letmeup.co.kr` and ClassUp remote
 * Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.
 
 Guardian reenrollment follows [docs/guardian-reenrollment.md](docs/guardian-reenrollment.md): separate purpose-bound SYSTEM RPC, actual capability before grant, protected pinned Guardian, one durable provider CAS, and public receipts only. An uncertain delivery is never retried; existing installation/manual password semantics remain unchanged.
+
+Refresh recovery must admit only an actual encoded key frame from the owned one-slot queue; delta frames never clear discard state. See docs/owned-viewer.md.

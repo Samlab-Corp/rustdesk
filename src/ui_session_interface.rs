@@ -1692,6 +1692,9 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn on_connected(&self, conn_type: ConnType);
     fn update_privacy_mode(&self);
     fn set_permission(&self, name: &str, value: bool);
+    // Ordinary Windows hosts send initial keyboard denial before successful
+    // PeerInfo, and only changes thereafter. Most UIs already keep this snapshot.
+    fn set_initial_keyboard_permission(&self, _enabled: bool) {}
     fn close_success(&self);
     fn update_quality_status(&self, qs: QualityStatus);
     fn set_connection_type(&self, is_secured: bool, direct: bool, stream_type: &str);
@@ -1848,6 +1851,8 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         // Save recent peers, then push event to flutter. So flutter can refresh peer page.
         self.lc.write().unwrap().handle_peer_info(&pi);
         self.set_peer_info(&pi);
+        self.ui_handler
+            .set_initial_keyboard_permission(*self.server_keyboard_enabled.read().unwrap());
         if self.is_file_transfer() {
             self.close_success();
         } else if !self.is_port_forward() && !self.is_terminal() {
