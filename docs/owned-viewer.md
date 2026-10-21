@@ -211,3 +211,12 @@ helpers across key-frame / refresh / key-frame recovery, missing/non-key frames,
 ordinary-client isolation and a thousand-frame burst with a one-frame bound.
 These tests are under `viewer_policy::tests::`, already run by both Windows
 focused-test steps; no broader filter or separate job is required.
+Platform-only follow-up: the Windows viewer product remains the exact build
+from `1fe3fe58b2958683f2a9e5de38c864198afc0a70`, pinned by Guardian
+`257ec53f407cf0c6b146045d41423ef0f463c84a`. Later conditional-compilation changes
+only restore the pre-existing non-Windows key-frame predicate and queue discard
+path: `viewer_policy` is a Windows-only module, so common client functions must
+not reference it on Linux/Android. Windows uses the identical helper calls and
+behavior from the pinned product; no new Windows executable is built for this
+platform-reference correction. Windows focused tests and check are repeated,
+while Linux/Android compilation remains for the updated remote checks.

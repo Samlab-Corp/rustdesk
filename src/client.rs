@@ -2935,11 +2935,17 @@ pub fn start_video_thread<F, T>(
                                 *vf
                             }
                             MediaData::VideoQueue => {
-                                if let Some(vf) = crate::viewer_policy::pop_queued_frame(
+                                #[cfg(windows)]
+                                let queued_frame = crate::viewer_policy::pop_queued_frame(
                                     &video_queue.read().unwrap(),
                                     &mut discard_queue.write().unwrap(),
                                     crate::common::owned_viewer(),
-                                ) {
+                                );
+                                #[cfg(not(windows))]
+                                let queued_frame = video_queue.read().unwrap().pop().filter(|_| {
+                                    !*discard_queue.read().unwrap()
+                                });
+                                if let Some(vf) = queued_frame {
                                     vf
                                 } else {
                                     continue;
