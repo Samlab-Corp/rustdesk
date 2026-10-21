@@ -34,7 +34,7 @@ as bounded fresh-frame requests require a new source-pinned product.
 The existing Windows x64 jobs in `flutter-build.yml` (pull requests) and
 `samlab-windows.yml` (manual company builds) run the exact
 `headless_viewer::tests::` and `viewer_policy::tests::` filters: currently 17 and
-10 tests, respectively. Generated bridge files, vcpkg dependencies and Rust caches
+13 tests, respectively. Generated bridge files, vcpkg dependencies and Rust caches
 are already prepared at that point. These release-profile tests explicitly use
 Rust 1.99.0 and run before the existing application build; no other platform or
 application build toolchain is changed. Either test failure fails the job.
@@ -195,3 +195,19 @@ cargo check --locked --offline --features flutter,hwcodec,vram --lib --bin samla
 cargo test --locked --offline --features flutter,hwcodec,vram --lib viewer -- --test-threads=1
 cargo build --locked --offline --release --features flutter,hwcodec,vram --bin samlab-viewer
 ```
+
+Refresh decoder recovery: the owned receiver intentionally sends every encoded
+frame through its one-slot replaceable queue. The ordinary client sends key
+frames separately as `MediaData::VideoFrame`, which clears `discard_queue`.
+The first refresh therefore exposed a deadlock: owned key frames remained queue
+messages and were discarded forever. `pop_queued_frame` now uses the same key
+frame predicate as the ordinary receiver, and clears discard only when it pops
+an actual encoded key frame for the owned viewer. Delta/empty frames cannot
+clear it; the ordinary non-owned queue keeps its previous discard behavior.
+The producer and decoder retain one replaceable encoded frame and one wake,
+rather than placing key frames in an unbounded direct message channel.
+Regression tests exercise producer queue replacement and actual decoder pop
+helpers across key-frame / refresh / key-frame recovery, missing/non-key frames,
+ordinary-client isolation and a thousand-frame burst with a one-frame bound.
+These tests are under `viewer_policy::tests::`, already run by both Windows
+focused-test steps; no broader filter or separate job is required.

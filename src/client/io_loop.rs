@@ -1157,14 +1157,7 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     fn contains_key_frame(vf: &VideoFrame) -> bool {
-        use video_frame::Union::*;
-        match &vf.union {
-            Some(vf) => match vf {
-                Vp8s(f) | Vp9s(f) | Av1s(f) | H264s(f) | H265s(f) => f.frames.iter().any(|e| e.key),
-                _ => false,
-            },
-            None => false,
-        }
+        crate::viewer_policy::contains_key_frame(vf)
     }
 
     // Currently, this function only considers decoding speed and queue length, not network delay.

@@ -19,3 +19,5 @@ LetMeUp remote access starts at `https://kiosk.letmeup.co.kr` and ClassUp remote
 * Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.
 
 Guardian reenrollment follows [docs/guardian-reenrollment.md](docs/guardian-reenrollment.md): separate purpose-bound SYSTEM RPC, actual capability before grant, protected pinned Guardian, one durable provider CAS, and public receipts only. An uncertain delivery is never retried; existing installation/manual password semantics remain unchanged.
+
+Refresh recovery must admit only an actual encoded key frame from the owned one-slot queue; delta frames never clear discard state. See docs/owned-viewer.md.

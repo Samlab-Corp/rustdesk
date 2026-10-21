@@ -114,3 +114,5 @@ Then translate that source into the file's target language (infer the language f
 * Company-approved SYSTEM commands use `docs/native-management.md`: fresh password plus a fixed Guardian/API execute-once grant, never a general interactive SYSTEM terminal. A running SYSTEM service and an audit use record do not prove command completion. Keep the new management feature disabled until the approved isolated pilot verifies execution and reconnection.
 
 * Guardian reenrollment uses only the separate purpose-bound SYSTEM protocol in [docs/guardian-reenrollment.md](docs/guardian-reenrollment.md). Keep fresh password, measured identity, capability before grant, strict public receipts, single provider CAS and no retry after uncertainty. Never send credentials through a terminal, general management command or argv.
+
+Refresh recovery must admit only an actual encoded key frame from the owned one-slot queue; delta frames never clear discard state. See docs/owned-viewer.md.
