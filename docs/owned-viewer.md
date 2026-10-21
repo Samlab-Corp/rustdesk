@@ -5,6 +5,16 @@ ordinary `DEFAULT_CONN` RustDesk desktop protocol and the company's existing
 rendezvous/relay. It does not require a new receiver protocol on installed hosts.
 It is not a terminal, management command runner, web server or external console.
 
+Connection dialogs remain terminal denials with no retry. Their public reasons
+are fixed categories: password_required/password_rejected, two_factor_required,
+session_authentication_required/login_rejected, remote_offline/remote_id_unknown,
+server_key_mismatch/server_key_rejected, connection_peer_reset/connection_timeout,
+rendezvous_connection_failed/relay_connection_failed/direct_connection_failed,
+connection_security_failed, or the unchanged connection_unavailable fallback.
+Raw dialog type/title/text/link, server addresses, peer IDs and credentials are
+never emitted. A category reports the protocol failure, not hardware identity
+or evidence that a remote device is safe to restart or reenroll.
+
 The trusted PC9 worker verifies the product path and hash, then writes one JSONL
 start record to redirected stdin. Never use a shell or pass credentials in argv.
 The record is strict and has exactly these fields:

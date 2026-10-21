@@ -1,5 +1,7 @@
 # Project instructions
 
+Owned-viewer connection diagnostics expose fixed failure categories only. Never emit raw dialog/error text or retry a failed dialog; preserve server/key/authentication gates.
+
 Follow [AGENTS.md](AGENTS.md) for source, build, and verification rules.
 
 Browser desktop viewing follows [docs/owned-viewer.md](docs/owned-viewer.md): separate fixed PC9 receiver, stdin-only credentials, bounded CPU JPEG, exact session/frame/permission gates and held-key release. Preserve installed ordinary-protocol hosts and never equate source/build proof with real viewing or hardware identity.

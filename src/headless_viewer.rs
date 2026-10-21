@@ -18,6 +18,54 @@ use std::{
 };
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+// Only fixed categories cross stdout. Remote/network text can contain private
+// values, so never return it or use it as a public fallback. All dialogs still
+// terminate the attempt; this does not add prompts, retries or weaker auth.
+fn connection_failure_reason(msgtype: &str, title: &str, text: &str) -> &'static str {
+    match msgtype {
+        "input-password" => return "password_required",
+        "re-input-password" => return "password_rejected",
+        "input-2fa" => return "two_factor_required",
+        "session-login"
+        | "session-re-login"
+        | "session-login-password"
+        | "session-login-re-password" => {
+            return "session_authentication_required";
+        }
+        _ => {}
+    }
+    if title == "Login Error" {
+        return "login_rejected";
+    }
+    if title != "Connection Error" {
+        return "connection_unavailable";
+    }
+    match text {
+        "Remote desktop is offline" => "remote_offline",
+        "ID does not exist" => "remote_id_unknown",
+        "Key mismatch" => "server_key_mismatch",
+        "Key overuse" => "server_key_rejected",
+        "Reset by the peer" => "connection_peer_reset",
+        "Timeout" => "connection_timeout",
+        _ if text.starts_with("Failed to connect via rendezvous server")
+            || text.starts_with("Failed to connect to rendezvous server") =>
+        {
+            "rendezvous_connection_failed"
+        }
+        _ if text.starts_with("Failed to connect via relay server")
+            || text.starts_with("Failed to connect to relay server") =>
+        {
+            "relay_connection_failed"
+        }
+        _ if text.starts_with("Failed to make direct connection to remote desktop") => {
+            "direct_connection_failed"
+        }
+        _ if text.starts_with("Failed to secure tcp") => "connection_security_failed",
+        _ => "connection_unavailable",
+    }
+}
+
 lazy_static::lazy_static! {
     static ref OUTPUT_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
 }
@@ -673,7 +721,7 @@ impl InvokeUiSession for Handler {
         }
     }
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
-        self.fail("connection_unavailable");
+        self.fail(connection_failure_reason(msgtype, title, text));
     }
     fn new_message(&self, msg: String) {
         self.fail("connection_closed");
@@ -749,6 +797,119 @@ impl InvokeUiSession for Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connection_failures_are_fixed_codes_and_never_retry_or_echo_private_text() {
+        let cases = [
+            (
+                "input-password",
+                "Password Required",
+                "",
+                "password_required",
+            ),
+            (
+                "re-input-password",
+                "Wrong Password",
+                "",
+                "password_rejected",
+            ),
+            ("input-2fa", "2FA Required", "", "two_factor_required"),
+            (
+                "session-login-password",
+                "",
+                "",
+                "session_authentication_required",
+            ),
+            (
+                "error",
+                "Login Error",
+                "PRIVATE-unknown-denial",
+                "login_rejected",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Remote desktop is offline",
+                "remote_offline",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "ID does not exist",
+                "remote_id_unknown",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Key mismatch",
+                "server_key_mismatch",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Key overuse",
+                "server_key_rejected",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Reset by the peer",
+                "connection_peer_reset",
+            ),
+            ("error", "Connection Error", "Timeout", "connection_timeout"),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect via rendezvous server: PRIVATE",
+                "rendezvous_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect to rendezvous server: PRIVATE",
+                "rendezvous_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect via relay server: PRIVATE",
+                "relay_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to connect to relay server: PRIVATE",
+                "relay_connection_failed",
+            ),
+            (
+                "relay-hint",
+                "Connection Error",
+                "Failed to make direct connection to remote desktop",
+                "direct_connection_failed",
+            ),
+            (
+                "error",
+                "Connection Error",
+                "Failed to secure tcp: PRIVATE",
+                "connection_security_failed",
+            ),
+            (
+                "PRIVATE",
+                "PRIVATE",
+                "PRIVATE password token key address id",
+                "connection_unavailable",
+            ),
+        ];
+        for (kind, title, text, expected) in cases {
+            let h = Handler::default();
+            // The retry hint remains ignored: every dialog is a terminal denial.
+            h.msgbox(kind, title, text, "PRIVATE-LINK", true);
+            assert_eq!(h.state.lock().unwrap().error, Some(expected));
+        }
+        assert_eq!(
+            connection_failure_reason("error", "PRIVATE", "Key mismatch PRIVATE"),
+            "connection_unavailable"
+        );
+    }
     #[test]
     fn public_peer_waits_for_actual_version_and_observed_false_permission() {
         let h = Handler::default();
