@@ -92,7 +92,7 @@ mod local {
                 GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
                 OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
             },
-            Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION},
+            Storage::FileSystem::{GetFileInformationByHandle, ReadFile, BY_HANDLE_FILE_INFORMATION},
             System::{
                 Com::CoTaskMemFree,
                 Pipes::{
@@ -112,6 +112,26 @@ mod local {
         service_manager::{ServiceManager, ServiceManagerAccess},
     };
     const UNTRUSTED: &str = "management_identity_untrusted";
+    enum PipeRead {
+        Data(usize),
+        Pending,
+        Closed,
+    }
+    // std::fs::File::read maps ERROR_NO_DATA (232, "nothing written yet" on a
+    // PIPE_NOWAIT handle) to Ok(0). Treating that as EOF closed the pipe before
+    // Guardian answered, so judge the raw ReadFile code like Guardian does.
+    fn read_nowait(pipe: &File, chunk: &mut [u8]) -> PipeRead {
+        let mut read = 0u32;
+        let code = match unsafe { ReadFile(handle(pipe), Some(chunk), Some(&mut read), None) } {
+            Ok(()) => 0,
+            Err(e) => (e.code().0 as u32) & 0xFFFF,
+        };
+        match code {
+            0 | 234 if read > 0 => PipeRead::Data(read as usize),
+            0 | 232 | 536 => PipeRead::Pending,
+            _ => PipeRead::Closed,
+        }
+    }
     struct Process(HANDLE);
     impl Drop for Process {
         fn drop(&mut self) {
@@ -401,17 +421,16 @@ mod local {
         let deadline=Instant::now()+Duration::from_secs(if execute {crate::reenrollment_policy::EXECUTE_SECONDS}else{20});
         let mut response=Vec::new(); let mut chunk=[0u8;16385];
         while Instant::now()<deadline {
-            match pipe.read(&mut chunk) {
-                Ok(0)=>break,
-                Ok(n)=>{response.extend_from_slice(&chunk[..n]);if response.len()>16384{return Err("reenrollment_protocol_rejected")}
+            match read_nowait(&pipe, &mut chunk) {
+                PipeRead::Data(n)=>{response.extend_from_slice(&chunk[..n]);if response.len()>16384{return Err("reenrollment_protocol_rejected")}
                     if let Some(end)=response.iter().position(|b|*b==b'\n') {
                         if end+1!=response.len(){return Err("reenrollment_protocol_rejected")}
                         let _again=verify(&pipe).map_err(|_| "reenrollment_execution_unconfirmed")?;
                         pipe.write_all(b"\n").map_err(|_| "reenrollment_execution_unconfirmed")?;return Ok(response)
                     }
                 },
-                Err(e) if matches!(e.raw_os_error(),Some(232|536))=>std::thread::sleep(Duration::from_millis(10)),
-                Err(_)=>break,
+                PipeRead::Pending=>std::thread::sleep(Duration::from_millis(10)),
+                PipeRead::Closed=>break,
             }
         }
         Err("reenrollment_execution_unconfirmed")
@@ -444,9 +463,8 @@ mod local {
         let mut response = Vec::new();
         let mut chunk = [0u8; 16385];
         while Instant::now() < deadline {
-            match pipe.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
+            match read_nowait(&pipe, &mut chunk) {
+                PipeRead::Data(n) => {
                     response.extend_from_slice(&chunk[..n]);
                     if response.len() > 16384 {
                         return Err("management_protocol_rejected");
@@ -462,10 +480,8 @@ mod local {
                         return Ok(grant);
                     }
                 }
-                Err(e) if matches!(e.raw_os_error(), Some(232 | 536)) => {
-                    std::thread::sleep(Duration::from_millis(10))
-                }
-                Err(_) => break,
+                PipeRead::Pending => std::thread::sleep(Duration::from_millis(10)),
+                PipeRead::Closed => break,
             }
         }
         Err("management_verification_unavailable")
